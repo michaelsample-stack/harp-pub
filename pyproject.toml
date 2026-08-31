@@ -1,0 +1,57 @@
+[project]
+name = "harp"
+version = "0.18.1"
+description = "Harvest Area Resolution Pipeline - resolves harvest geometry for EUDR due diligence"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "PyYAML>=6.0",
+    "fsspec>=2024.2",
+]
+
+# The NGIS libraries are imported lazily through harp.adapters, so a BC-only
+# run needs none of them. See that module for what each is used for.
+
+[project.optional-dependencies]
+gcp = [
+    "gcsfs>=2024.2",
+    "google-cloud-bigquery>=3.17",
+    "earthengine-api>=0.1.390",
+]
+geo = [
+    # shapely also enables envelope dissolving in normalise; without it an
+    # operating envelope emits one sce_base row per block rather than one.
+    "shapely>=2.0",
+    "pyproj>=3.6",
+    "geopandas>=0.14",
+]
+xlsx = [
+    "openpyxl>=3.1",        # reading a client's .xlsx export directly
+]
+ngis = [
+    # Not on PyPI - install from the NGIS index or a git ref.
+    # "eudr-clean",
+    # "eudr-geojson",
+    # "ngis-eo",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.3",
+]
+
+[project.scripts]
+harp = "harp.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["harp*"]
+
+[tool.setuptools.package-data]
+harp = ["configs/*.yaml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

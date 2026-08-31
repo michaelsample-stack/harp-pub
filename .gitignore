@@ -1,0 +1,24 @@
+# Run outputs and caches. Everything here is regenerated, and
+# some of it is the client's data.
+data/inbox/*
+data/staging/*
+data/outbox/*
+data/rejects/*
+data/manifest/*
+!data/**/.gitkeep
+
+# The library lives outside the repository. See sources.library.path.
+harp-library/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# The client's own files. These arrive in a monthly drop and are read from
+# wherever they were put; they are not part of the code.
+*.xlsx
+*.xlsm
+!docs/*.xlsx

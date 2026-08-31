@@ -1,0 +1,95 @@
+# HARP - Harmac production
+#
+# Identical pipeline, different paths. The only thing that changes between
+# environments is this file.
+
+client: harmac
+environment: prd
+
+paths:
+  inbox:    gs://ngis-harmac-tms-prd-uswe1-harp/inbox
+  staging:  gs://ngis-harmac-tms-prd-uswe1-harp/staging
+  outbox:   gs://ngis-harmac-tms-prd-uswe1-harp/outbox
+  rejects:  gs://ngis-harmac-tms-prd-uswe1-harp/rejects
+  manifest: gs://ngis-harmac-tms-prd-uswe1-harp/manifest
+
+bigquery:
+  enabled: true
+  project: ngis-harmac-tms-prd-uswe1
+  dataset: harp          # staging vs sce_base direct - CONFIRM with TraceMark
+
+sources:
+  library:
+    # Outside the repo. Months accumulate and they are client geometry, so
+    # they do not belong in version control.
+    path: ../harp-library
+
+    # Nothing reaches the shelf without a person saying so. The eventual
+    # intent is a service that promotes clean months itself; until the
+    # cleaner is tuned for this data rather than for supplier submissions, a
+    # human looks first.
+    require_approval: true
+
+    # Validate, clean, validate again, up to this many rounds. Required
+    # findings still standing after the last one send the month to
+    # quarantine rather than pending.
+    max_passes: 3
+
+    country_iso2: CA
+
+    # Passed to eudr_clean. Every one of these changes what is being asserted
+    # about a plot, so all are off until someone decides otherwise.
+    clean:
+      hole_mode: null
+      fix_overlaps: false
+      convert_degenerate_to_points: false
+      convert_small_polygons: false
+      remove_proximate_vertices: false
+
+  lots:
+    # From the client's own master data table, 31 August 2026. Awaiting
+    # confirmation - see the email to Angela.
+    #
+    # Cubic metres of chips per air-dry tonne of pulp. Cedar takes over half
+    # again as much volume as fir for the same tonne of pulp, so the walkback
+    # cannot be done on the total and apportioned after.
+    chip_m3_per_adt:
+      DFIR:   5.00
+      HEMBAL: 5.50
+      RCEDAR: 7.75
+
+    # The client records this as 3.375 BDU/m3. Taken literally that is 3.7
+    # tonnes of dry fibre in a cubic metre of chips - denser than solid wood,
+    # and chips are mostly air. Used as m3 per BDU, which gives about 0.32
+    # BDT/m3 and a chips-to-pulp ratio of 1.66:1. A kraft mill should show
+    # near 2:1, so the inverted reading is the right one.
+    chip_m3_per_bdu: 3.375
+
+    # A bone dry unit is 2,400 lb.
+    tonnes_per_bdu: 1.0886
+
+    # The walkback covers twice the lot's requirement. Piles do not empty
+    # cleanly, and over-declaring is the failure that survives an audit.
+    walkback_multiple: 2.0
+
+  ften:
+    default_client_number: "00158809"
+    district_field: GEOGRAPHIC_DISTRICT_NAME
+    completion_rule:
+      require_end_date: true
+      require_start: true
+
+  detection:
+    mode: unset
+
+  supplier_file:
+    accepted: [geojson, shp, gpkg, kml]
+
+  hbs:
+    enabled: true
+    delay_seconds: 0.45
+
+resolution:
+  default_jurisdiction: BC
+  cache: gs://REPLACE-ME/harp/cache
+  apply_completion_rule: true

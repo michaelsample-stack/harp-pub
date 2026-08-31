@@ -1,0 +1,113 @@
+# HARP - local development
+#
+# Paths are relative to the repo root. Nothing here touches GCP, so this runs
+# with no credentials beyond the public BC endpoints.
+
+client: harmac
+environment: dev
+
+paths:
+  inbox:    ./data/inbox
+  staging:  ./data/staging
+  outbox:   ./data/outbox
+  rejects:  ./data/rejects
+  manifest: ./data/manifest
+
+bigquery:
+  enabled: false
+
+sources:
+  library:
+    # Outside the repo. Months accumulate and they are client geometry, so
+    # they do not belong in version control.
+    path: ../harp-library
+
+    # Nothing reaches the shelf without a person saying so. The eventual
+    # intent is a service that promotes clean months itself; until the
+    # cleaner is tuned for this data rather than for supplier submissions, a
+    # human looks first.
+    require_approval: true
+
+    # Validate, clean, validate again, up to this many rounds. Required
+    # findings still standing after the last one send the month to
+    # quarantine rather than pending.
+    max_passes: 3
+
+    country_iso2: CA
+
+    # Passed to eudr_clean. Every one of these changes what is being asserted
+    # about a plot, so all are off until someone decides otherwise.
+    clean:
+      hole_mode: null
+      fix_overlaps: false
+      convert_degenerate_to_points: false
+      convert_small_polygons: false
+      remove_proximate_vertices: false
+
+  lots:
+    # From the client's own master data table, 31 August 2026. Awaiting
+    # confirmation - see the email to Angela.
+    #
+    # Cubic metres of chips per air-dry tonne of pulp. Cedar takes over half
+    # again as much volume as fir for the same tonne of pulp, so the walkback
+    # cannot be done on the total and apportioned after.
+    chip_m3_per_adt:
+      DFIR:   5.00
+      HEMBAL: 5.50
+      RCEDAR: 7.75
+
+    # The client records this as 3.375 BDU/m3. Taken literally that is 3.7
+    # tonnes of dry fibre in a cubic metre of chips - denser than solid wood,
+    # and chips are mostly air. Used as m3 per BDU, which gives about 0.32
+    # BDT/m3 and a chips-to-pulp ratio of 1.66:1. A kraft mill should show
+    # near 2:1, so the inverted reading is the right one.
+    chip_m3_per_bdu: 3.375
+
+    # A bone dry unit is 2,400 lb.
+    tonnes_per_bdu: 1.0886
+
+    # The walkback covers twice the lot's requirement. Piles do not empty
+    # cleanly, and over-declaring is the failure that survives an audit.
+    walkback_multiple: 2.0
+
+  ften:
+    # Nanaimo Forest Products Ltd - verified against the live service.
+    # Note "HARMAC" as a name filter returns nothing; always use the number.
+    default_client_number: "00158809"
+    district_field: GEOGRAPHIC_DISTRICT_NAME
+    completion_rule:
+      require_end_date: true
+      require_start: true
+      start_after: "2025-07-01"
+
+  detection:
+    # How HARP calls tracemark-eo. Undecided - library or deployed service.
+    mode: unset
+
+  supplier_file:
+    accepted: [geojson, shp, gpkg, kml]
+
+  hbs:
+    # Public timber mark record. No credentials. Used whenever an identifier
+    # fails the cutblock layer, to establish whether the land is Crown or
+    # private and who holds the mark.
+    enabled: true
+    delay_seconds: 0.45
+
+  private_marks:
+    # BC scaled-timbermark extracts. A registry, not client data - the files
+    # hold 1,907 marks across 23 districts, of which this client uses a few
+    # dozen. Resolved parcels are cached per PID and shared across clients.
+    #
+    # The extracts are NOT cumulative: the most recently processed file covers
+    # 27.7% of the year, so every file is unioned. Needs the bcparcel package.
+    enabled: true
+    extracts_dir: ./data/registry/bc_private_timber_marks
+
+resolution:
+  # A raw client list needs no curation. These only fill gaps in it.
+  default_jurisdiction: BC
+  cache: ./data/cache
+  # Apply the completion rule to returned rows rather than in the query - a
+  # date predicate forces a full scan of 222,129 blocks.
+  apply_completion_rule: true

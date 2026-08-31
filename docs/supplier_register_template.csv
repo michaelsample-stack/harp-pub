@@ -1,0 +1,8 @@
+supplier_id,name,jurisdiction,land_type_hint,tier,client_number,client_locations,geodata_format,has_coordinates,has_catchment,contact,notes
+S001,Nanaimo Forest Products Ltd,BC,public,direct,00158809,00,,false,false,,verified against FTEN - 19 blocks
+S002,EXAMPLE Private Woodlot,BC,private,direct,,,geojson,false,false,,HINT ONLY - land type is resolved by HBS not declared here
+S003,EXAMPLE US Supplier,WA,private,direct,,,,true,false,,GPS point per load
+S004,EXAMPLE US Broker,OR,private,indirect,,,,false,true,,catchment plus operational timeline
+# land_type_hint is a HINT. You cannot tell Crown from private by looking:
+# FTEN holds 83916 timber marks beginning with E and Harmac's sixteen are not
+# among them. HARP resolves it via HBS and writes the answer to the manifest.
