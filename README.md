@@ -1,410 +1,400 @@
 # HARP — Harvest Area Resolution Pipeline
 
-Resolves harvest area geometry from whatever evidence a supplier can provide — a
-timber mark, a coordinate, a catchment boundary, or a shapefile — validates it,
-and lands it in TraceMark as `sce_base` rows for EUDR due diligence.
+HARP aggregates likely harvest areas associated with timber log and wood chip purchases by Harmac Pacific.
 
-Client-agnostic. **A client is a YAML file, not a code fork.**
+Where possible, it resolves purchases using primary government and other authoritative records, including forest tenure, harvest, timber mark, and parcel data.
+
+Where direct resolution is not possible, HARP uses known operating or supply areas and HLS-DIST change detection to identify likely harvest activity within the relevant area and time period.
+
+The resulting geometries are attributed, consolidated, cleaned, and validated for EUDR geolocation requirements.
 
 ---
 
-## Why this exists separately
+## Outputs
 
-`tracemark-eo` is a satellite detection engine. HARP is an *acquisition and
-resolution* layer that calls it as one of five paths. Keeping them apart means
-the BC tenure work is reusable across clients rather than buried in a Harmac
-folder.
+### Monthly
+
+| File | Description |
+|---|---|
+| `harvest-YYYY-MM.geojson` | Consolidated harvest geometry for the month, including precision tier, traceability method, and supporting attributes |
+| `resolution-*.csv` | One row per supply source showing how it was resolved |
+| `run-*.txt` | Processing log for the run |
+
+### Production lot
+
+| File | Description |
+|---|---|
+| `lot-<id>.geojson` | Harvest areas that may have contributed fibre to the production lot |
+| `lot-walkback-*.csv` | Delivery records included in the lot walkback and the period covered |
 
 ---
 
 ## Entry points
 
-| | |
+HARP can be run from the command line using:
+
+    harp <command>
+
+or:
+
+    python -m harp <command>
+
+### Main commands
+
+| Command | Purpose |
 |---|---|
-| `harp resolve ...` | console script, after `pip install -e .` |
-| `python -m harp resolve ...` | no install needed, from the repo root |
-| `python tools/harp_gui.py` | desktop wrapper — see below |
-| `from harp import router` | as a library |
+| `harp run <drop> --month YYYY-MM` | Process a complete monthly client data package |
+| `harp library` | Review staged and approved monthly datasets |
+| `harp lot <lot list>` | Resolve production lots back to contributing deliveries and harvest areas |
+| `harp areas` | Manage manually supplied operating and search areas |
+| `harp mills` | Manage supplier mill locations and districts |
 
-## Desktop wrapper
+### Resuming a run
 
-```bash
-python tools/harp_gui.py
-```
+If a run reaches the detection stage but does not receive a result, it can resume without repeating the earlier resolution stages.
 
-A window over the library while it is being built out. Three tabs:
-
-Five tabs, in the order a monthly run happens.
-
-**Package** — point at the drop. Files are recognised by their columns, and the
-supply list is picked up automatically. A file matching no signature is shown
-with the columns it had rather than skipped.
-
-**Resolve** — inputs, options, run. Live tier tallies and a progress bar; rows
-appear as each source finishes, colour-coded. Stop works mid-run and partial
-results still write. Nothing touches disk until *Write outputs*.
-
-**Results** — filter by tier, search across identifier, supplier, holder and
-district, sort by any column. Selecting a row shows every rung tried, hit or
-miss, with the query used — the tab for asking "why did that come back P4".
-*Probe one identifier* runs the full ladder on any value, whatever its class.
-
-**Outputs** — previous runs, with buttons to open the outbox, rejects and
-staging folders.
-
-**Setup** — config paths, and what is installed. `bcparcel` missing means R5b
-will not run and private marks stop at the district; the status bar says so.
-
-Everything calls into `harp`. Nothing is reimplemented — two copies of the
-ladder is how they drift apart.
-
-## The private mark registry
-
-BC scaled-timbermark extracts link a private mark to the parcels it was scaled
-from. ParcelMap BC publishes those parcels. That is the only public route from a
-private mark to a specific piece of land rather than a district.
-
-```bash
-harp resolve SOURCE.xlsx --private-marks ./data/registry/bc_private_timber_marks
-```
-
-It is a **registry, not client data** — the extracts hold 1,907 marks across 23
-districts, of which a client uses a few dozen. Parcels are cached per PID and
-shared: a mark resolved for one client is free for the next.
-
-**A parcel is a search area, not an answer.** It is the ownership boundary; a
-200 ha parcel behind a 12 ha cut over-declares by sixteen times. The harvest
-inside it is found by change detection. Until that runs, a parcel result is P3.
-
-Needs `bcparcel`, installed rather than vendored.
-
-## The client's own declaration
-
-A Digital Material Passport is a declaration the client has already filed. HARP
-reads the download link out of each, fetches the geometry once, explodes
-collections and multiparts, and sorts on area.
-
-```bash
-harp resolve SOURCE.xlsx --dmp ./data/inbox/2026-08
-```
-
-| | Tier | Where it goes |
-|---|---|---|
-| Cutblock, under 1,000 ha | P3 | the master collection |
-| Regional polygon | P4 | `catchments-*.geojson`, for detection |
-
-It is **not a rung** — a passport has no identifier to key on, so it runs after
-the per-source loop. Every feature carries `harp_provenance: client_declaration`
-and no `harp_source_id`.
-
-Deduplication is geometric, since a declared polygon has no registry identity: a
-declared cutblock with 50% or more of its area inside one we resolved ourselves
-is dropped. Ours carries a timber mark and a tenure holder; theirs carries
-neither.
-
-Downloads happen once and are never discarded — the source retains DMP data for
-roughly a week after delivery.
-
-## The client's own declaration
-
-A Digital Material Passport is a declaration the client has already filed. HARP
-reads the download link out of each, fetches the geometry once, explodes
-collections and multiparts, and sorts on area.
-
-```bash
-harp resolve SOURCE.xlsx --dmp ./data/inbox/2026-08
-```
-
-| | Tier | Where it goes |
-|---|---|---|
-| Cutblock, under 1,000 ha | P3 | the master collection |
-| Regional polygon | P4 | `catchments-*.geojson`, for detection |
-
-It is **not a rung** — a passport has no identifier to key on, so it runs after
-the per-source loop. Every feature carries `harp_provenance: client_declaration`
-and no `harp_source_id`.
-
-Deduplication is geometric, since a declared polygon has no registry identity: a
-declared cutblock with 50% or more of its area inside one we resolved ourselves
-is dropped. Ours carries a timber mark and a tenure holder; theirs carries
-neither.
-
-Downloads happen once and are never discarded — the source retains DMP data for
-roughly a week after delivery.
-
-## Monthly drops
-
-A LIMS export arrives on a cycle and mostly repeats itself. Resolving all of it
-every month is wasteful and buries the rows that actually moved.
-
-```bash
-harp resolve data/inbox/SOURCE.xlsx --config harmac-dev \
-     --since data/outbox/resolution-20260812-142944.csv
-```
-
-### What is in a drop
-
-```bash
-harp package ./data/inbox/2026-08
-```
-
-Recognises files by their **columns, never their name**. Filenames in this data
-have been wrong three separate ways — a workbook named "June 2026" whose sheet
-is "January 2026" and whose records were processed in February, a "Calendar
-Year" label on files that are not year-to-date, and a `ProcessedOn` that varies
-per record. A file matching no signature is reported with the columns it had,
-not skipped.
-
-| Kind | Behaviour |
+| Command | Purpose |
 |---|---|
-| job list | **replaces** — the current statement of what needs answering |
-| delivery record | read for volume, never resolved |
-| passport | fetched, exploded, sorted into cutblocks and regional areas |
-| registry extract | **accumulates** — the newest private mark file alone covers 27.7% of the year |
-| supplier geodata | attaches to one source |
+| `harp detect --month YYYY-MM` | Resume at change detection |
+| `harp enrich <detections>` | Resume attribution using an existing detection result |
+| `harp union` | Build the detection submission polygon without sending it |
 
-### Comparing against last month
+### Other commands
 
-Compares against the previous manifest and reports:
+`harp summary`, `harp runs`, `harp package`, `harp resolve`, `harp register`,
+`harp ften`, `harp forget-parcels`
 
-| | |
-|---|---|
-| **new** | resolved |
-| **changed** | re-resolved, with what moved |
-| **gone** | written to rejects — a supplier who stopped delivering is a fact, not an absence |
-| **unchanged** | previous answer carried forward |
+---
 
-Keyed on the client's own source id, falling back to the identifier. An
-identifier alone is not unique — `PRINCETON` appears under both Gorman and
-Weyerhaeuser — and keying on it reports dozens of spurious changes.
+## Desktop interface
 
-Combined with the cache, a monthly run touches the network only for what is
-genuinely new. HBS records never expire; a mark resolved in August is not
-re-queried in September.
+Launch with:
 
-## Resolving a raw client list
+    python tools/harp_gui.py
 
-Hand it whatever the client sent. No curation, no register to maintain first —
-the minimum viable input is a column of identifiers.
+The interface contains four tabs:
 
-```bash
-harp resolve data/inbox/SOURCE.xlsx --config harmac-dev --unique --no-geometry
-harp resolve data/inbox/SOURCE.xlsx --config harmac-dev --class B
-```
+**The month**, **Library**, **Lots**, and **Setup**.
 
-Every identifier goes down its jurisdiction's ladder. BC is implemented; the US
-states fail loudly rather than quietly returning nothing, because a source never
-attempted must not look like one attempted and missed.
+The Month tab runs the complete monthly pipeline and reports the status of each stage. If processing stops, the interface identifies where it stopped without requiring the user to inspect the run log.
 
-### The BC ladder
+---
 
-| Rung | Query | Outcome |
-|---|---|---|
-| R1 | FTEN 340 `TIMBER_MARK` | P1 cut block |
-| R2 | FTEN 340 `HARVEST_AUTH_FOREST_FILE_ID` | P1 |
-| R3 | FTEN 340 `CUT_BLOCK_FOREST_FILE_ID` | P1 |
-| R4 | FTEN 340 file id + cutting permit | P1 |
-| R5 | HBS mark record | classify Crown or private |
-| R6 | FTEN 340, the licence HBS named | P2 |
-| R7 | FTEN 340, client number + district | P2 |
-| R5b | private mark registry → PID → ParcelMap BC | P3 — private marks |
-| R8 | district ∩ private forest ownership (layer 238) | P3 — opt-in |
-| R9 | district only | P4 |
+## Investigation tools
 
-R1 does the work. Across 217 Harmac identifiers every resolution — 71 of them —
-matched on `TIMBER_MARK`. R2–R4 have never fired and are cheap insurance.
+The `tools/` directory contains utilities for investigation and troubleshooting outside the normal pipeline.
 
-R5 is the pivot: HBS holds a record for every mark issued in BC including the
-private ones that appear in no tenure geometry, and gives back the holder, a
-client number that is FTEN's own key, and the district.
+These include:
 
-R8 is opt-in — `--catchment`, or the tick box in the GUI. For a mark on private
-land there is no harvest geometry anywhere public, so the best available answer
-is a bounded area: the district it was issued in, narrowed to private forest
-ownership. The intersect runs server-side. Layer 238's field names are read at
-run time rather than hardcoded, because they are unverified and a wrong guess
-would fail silently.
+- supplier-to-tenure matching: `c2_probe.py`, `ften_candidates.py`, `aliases.py`
+- Washington Forest Practices queries: `fpars_*.py`, `fpa_probe.py`
+- private timber mark investigation: `ptm_*.py`
+- direct detection API testing: `dist_api_test.py`
 
-**A catchment bounds where the harvest could be, not where it was.** It is P3,
-and the reduction it achieves should be measured on real data before anyone
-relies on the tier.
+---
 
-### The EUDR libraries
+## Monthly workflow
 
-Validation and cleaning need two NGIS packages that are not on PyPI. Install
-them from their clones:
+A typical monthly run is:
 
-```bash
-pip install -e ../eudr_geojson
-pip install -e ../eudr_clean
-```
+    harp run ./data/inbox/2026-07 --month 2026-07
 
-Editable, so a change to either is picked up without reinstalling — which
-matters while `eudr_clean` is being tuned for this data rather than for
-supplier submissions.
+### 1. Sort
 
-Not vendored. `tracemark-eo` vendors `eudr_geojson`, and that is how copies
-drift.
+Incoming files are identified by their column structure rather than their filenames.
 
-## From a lot back to its deliveries
+This is intentional. Source filenames have proven inconsistent and are not treated as reliable identifiers.
 
-```bash
-harp lot June_Lot_List.xlsx --deliveries NFP_Load_Delivery_Summary.xlsx --dry-run
-```
+### 2. Resolve
 
-A pulp lot is made from chips that arrived over the preceding weeks, already
-mixed. Nothing records which delivery went into which lot, so the answer is
-bounded rather than exact: walk back from the lot's production date,
-accumulating by species, until twice the lot's requirement is covered. Every
-supplier in that window is declared.
+Each supply source is passed through an ordered series of resolution methods. The first method that produces usable geometry is retained.
 
-The arithmetic runs pulp → chip volume → bone-dry tonnes, with a different
-factor per species — cedar takes over half again as much volume as fir for the
-same tonne of pulp, so it cannot be done on the total and apportioned after.
+Examples include:
 
-Every factor is in config under `sources.lots`.
+- a BC timber mark resolving to a cut block;
+- a private timber mark resolving to the titled parcel from which it was scaled;
+- a supplier resolving to forest tenure held by that company; or
+- a Washington supplier resolving to registered Forest Practices applications.
 
-**A sanity check worth knowing about.** The output reports chips against pulp
-by mass. A kraft mill should show near 2:1, because roughly half the wood
-leaves the digester as black liquor. Well outside 1.5 to 3 and a factor is
-wrong or inverted, which the run says out loud rather than burying.
+### 3. Establish search areas
+
+Sources that cannot be resolved directly are assigned the most specific reasonable geographic search area available.
+
+Depending on the source, this may include:
+
+- a known supplier operating area;
+- a Natural Resource District;
+- a county;
+- a national forest; or
+- another manually defined supply area.
+
+Where no usable geographic boundary is available, no geometry is created and the source is recorded as unresolved.
+
+### 4. Split
+
+Geometry is separated into three groups:
+
+1. resolved harvest areas;
+2. tenure or registered harvest areas; and
+3. broader search areas.
+
+Resolved harvest areas require no further detection. The remaining areas are passed to the change-detection stage.
+
+### 5. Detect
+
+Tenure and search areas are combined into a submission geometry and sent to the NGIS change-detection service for the applicable time period.
+
+The service uses HLS-DIST-derived harvest detection to identify likely recent clearing activity within the submitted areas.
+
+### 6. Attribute
+
+Detection results contain harvest geometry and dates but do not inherently identify the original supplier.
+
+HARP spatially joins the returned detections against the supplier-specific input geometries to restore that attribution.
+
+The original supplier geometries are therefore retained separately from the combined detection submission.
+
+### 7. Validate and stage
+
+The resulting harvest dataset is:
+
+1. consolidated;
+2. cleaned;
+3. validated;
+4. revalidated where necessary; and
+5. staged for review.
+
+An approved month can then be added to the HARP library.
+
+---
 
 ## Precision tiers
 
-Every resolution says how tightly its geometry is bounded. This is what a
-consumer filters on.
+Each feature carries a precision tier describing how closely the source has been resolved to an actual harvest location.
 
-| Tier | Geometry | Plot claimable |
+| Tier | Description | Traceability |
 |---|---|---|
-| P1 | cut block polygon | yes |
-| P2 | harvesting authority, licence, or holder tenure in a district | yes |
-| P3 | constrained catchment | with a stated basis |
-| P4 | administrative area only | **no** — an operating area |
-| P5 | unresolved | no |
+| P1a | Harvest block identified directly from a public forest record | direct |
+| P1b | Titled parcel associated with a timber mark from the client's delivery record | direct |
+| P1c | Harvest detected within that parcel | direct |
+| P2a | Registered harvest or tenure area associated with a supplier | indirect |
+| P2b | Harvest detected within that registered area | indirect |
+| P3a | Broader search area such as an operating area, district, county, or national forest | inferred |
+| P3b | Harvest detected within that broader area and attributed to the supplier | inferred |
+| P4 | No usable geometry resolved | — |
+
+P4 covers two situations that produce the same result for different reasons. A
+source may be unresolved because no geographic basis could be established, in
+which case it is a question for the client. Or it may be out of scope, such as
+the mill's own yard piles or landfill, in which case no geometry is expected.
+Both are reported, and only the first is outstanding work.
+
+### P1
+
+P1 represents geometry tied directly to information contained in the client's supply records.
+
+P1a requires no further detection because the harvest block itself has already been identified.
+
+P1b represents a parcel associated directly with a timber mark. The parcel is treated as a bounded search area rather than as the harvest itself.
+
+P1c is the harvest detected within that parcel.
+
+### P2
+
+P2 represents supplier-level geometry derived from external records.
+
+For example, a company may be matched to forest tenure or a registered harvest application. This establishes an area associated with that supplier but does not by itself demonstrate that a particular Harmac delivery originated there.
+
+### P3
+
+P3 is used where more precise resolution is not possible.
+
+A broader known operating or supply area is used as the search boundary, and detected harvest within that boundary becomes the resulting harvest geometry.
+
+### Traceability
+
+Traceability describes how geometry was associated with the supply source.
+
+It does not by itself determine whether a feature satisfies a regulatory
+due-diligence requirement.
+
+The two are recorded separately because they can disagree. The tier describes
+the geometry; traceability describes the route taken to it. A harvest block
+retrieved from a public forest register carries a P1a geometry, but where it
+was reached through a tenure holder rather than through an identifier on the
+delivery, its traceability is recorded as indirect.
 
 ---
 
-## The five paths
+## Production lot walkback
 
-| Path | Jurisdiction | Input | `eudr_sub_type` | Quality |
-|---|---|---|---|---|
-| `supplier_geodata` | any | polygons supplied direct | `parcel` | 1 — best |
-| `ften_public` | BC | timber mark / client number | `database_polygon` | 2 |
-| `detect_point` | US | lat/long + window | `change_detection_polygon` | 3 |
-| `detect_catchment` | US | boundary + timeline | `change_detection_polygon` | 4 |
-| `unresolved` | — | nothing usable | — | — |
+Production lots are processed using:
 
-`unresolved` is a real outcome, not an error. It lands in rejects so a supplier
-who can't provide anything is *visible* rather than silently absent.
+    harp lot ./data/inbox/2026-07
 
-**`land_type` is resolved, not declared.** The register once took it as input.
-You cannot tell Crown from private by looking — FTEN holds 83,916 timber marks
-beginning with `E` and Harmac's sixteen are not among them. HARP establishes it
-via HBS and writes it to the manifest.
+Harmac production lots are made from wood chips accumulated from multiple deliveries and mixed in storage before entering production.
 
----
+There is therefore no direct record identifying exactly which individual deliveries contributed to a particular lot.
 
-## Getting started
+HARP addresses this using a historical walkback.
 
-```bash
-python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
+For each production lot, the system:
 
-harp ften regions --config harmac-dev
-harp ften pull --config harmac-dev --client 00158809 --since 2025-07-01
-harp runs --config harmac-dev
-```
+1. reads the lot weight and species composition;
+2. converts the production quantity to an estimated required mass of wood chips;
+3. applies the configured safety margin; and
+4. walks backward through the delivery record until the required quantity of each species has been accounted for.
 
-No credentials needed for FTEN — BC's endpoints are open under the OGL.
+All suppliers represented within that delivery window are included in the resulting lot dataset.
 
-`--dry-run` works on anything that writes. Use it.
+The current default margin is 2×.
+
+This accounts for uncertainty introduced by chip storage and reclaim, including material that may remain in storage for an extended period before entering production.
+
+Conversion factors are configured under:
+
+    sources.lots
+
+HARP also reports the relationship between incoming chip mass and pulp production as a basic QA check.
+
+For a kraft mill, the expected relationship should generally be near 2:1. Results substantially outside approximately 1.5:1 to 3:1 indicate that the underlying conversion factors or assumptions should be reviewed.
 
 ---
 
-## Local and cloud are the same code
+## Dependencies
 
-Three decisions make this work, and none of them are clever:
+HARP uses existing NGIS services and supporting libraries where those functions already exist.
 
-**Paths are strings.** `fsspec` handles `./data/staging` and
-`gs://bucket/staging` identically. No branching.
+| Dependency | Purpose |
+|---|---|
+| **TraceMark** | The compliance platform HARP's output is loaded into. HARP produces the geolocation half; risk assessment and due-diligence reporting happen there |
+| **TraceMark EO** | HLS-DIST-derived harvest change detection |
+| **eudr_geojson** | Validation against EUDR geometry requirements |
+| **eudr_clean** | Cleaning and repair of geometry that fails validation |
+| **bcparcel** | Resolution of private BC timber marks to associated titled parcels |
 
-**Auth is ADC.** `gcloud auth application-default login` once. BigQuery and
-Earth Engine then behave the same on your laptop and in a Cloud Function.
+Public data sources used by HARP include:
 
-**Config, not environment.** `harmac-dev.yaml` points at local paths,
-`harmac-prd.yaml` points at GCS. Same code reads both.
-
-Nothing in the pipeline asks "am I in the cloud?" If you want to write that,
-put it in the config instead.
-
----
-
-## Layout
-
-```
-harp/
-  cli.py             every step, runnable standalone
-  config.py          YAML loading, path resolution
-  io.py              local / gs:// shim
-  manifest.py        run log and rejects
-  router.py          register-driven path selection
-  normalise.py       everything → sce_base
-  sources/
-    ften.py          BC forest tenure          ✅ working
-    supplier_file.py direct geodata            ⬜ stub
-    detection.py     tracemark-eo wrapper      ⬜ stub
-  configs/
-    harmac-dev.yaml
-    harmac-prd.yaml
-functions/           Cloud Function shim — calls cli.main()
-terraform/           deployment
-```
+- BC Forest Tenure
+- BC Harvest Billing
+- ParcelMap BC
+- BC Natural Resource Districts
+- Washington DNR Forest Practices
+- US Census county boundaries
+- USDA Forest Service boundaries
 
 ---
 
-## Two rules
+## Installation
 
-**Every run writes a manifest row.** What ran, when, against what, how many in
-and out. This is what makes the pipeline replayable in year three when someone
-challenges a polygon.
+Install HARP and its supporting local packages in editable mode:
 
-**Nothing is dropped silently.** If a record doesn't make it through, it lands
-in rejects with a reason. The existing NGIS geofence join drops unmatched
-polygons with no error and no log — we are not repeating that.
+    pip install -e .
+    pip install -e ../bcparcel
+    pip install -e ../eudr_geojson
+    pip install -e ../eudr_clean
 
----
+Editable installs are used because the packages are under active development.
 
-## Service quirks worth knowing
+The EUDR libraries are imported only when required during processing.
 
-Both verified against the live BC endpoint:
+`shapely` and `pyproj` are required for geodesic area calculations and geometric deduplication.
 
-**`resultOffset` is ignored on groupBy queries.** Every page returns identical
-rows. A naive loop runs forever. HARP pages on a key instead — never offset.
+If a required dependency is unavailable, HARP reports the missing functionality rather than silently substituting another method.
 
-**Name filtering doesn't work.** `CLIENT_NAME LIKE '%HARMAC%'` returns nothing;
-the tenure is registered to Nanaimo Forest Products Ltd. Always filter on
-`CLIENT_NUMBER`.
+Dependency status can also be checked from the **Setup** tab of the desktop interface.
 
 ---
 
-## Open questions
+## Repository layout
 
-Tracked in `docs/HPA1_Decisions_Log_v1_2.md` and `docs/HARP_Design_v0_7_0.md`. The blocking ones:
+    harp/
+      run.py            monthly pipeline
+      router.py         source resolution
+      catchments.py     operating and search areas
+      detect.py         detection submission and attribution
+      detection_api.py  detection service interface
+      library.py        monthly library and approval workflow
+      lots.py           production lot walkback
+      sources/          source and register integrations
+      configs/          client and environment configuration
 
-- Write to `sce_base` directly, or a staging table TraceMark promotes?
-- Who registers `sce_type` in `db_primary_sources`? Unregistered types make
-  assessments silently skip every row.
-- What exactly is the completion rule? `CompletionRule` holds the current
-  definition in one place so it can be argued about rather than assumed.
-- How does HARP call `tracemark-eo` — as a library, or the deployed service?
+    tools/              desktop interface and investigation utilities
+    docs/               design and decision documentation
+    data/               regenerated working data
+
+The HARP geometry library is stored outside the repository.
+
+Its location is configured under:
+
+    sources.library.path
 
 ---
 
-## Licence and attribution
+## Processing rules
 
-BC data is used under the **Open Government Licence – British Columbia**.
-Attribution is required and is written into every output file's metadata block.
+### Do not create unsupported geometry
 
-Sources:
-`WHSE_FOREST_TENURE.FTEN_CUT_BLOCK_POLY_SVW` (layer 340) ·
-`WHSE_ADMIN_BOUNDARIES.ADM_NR_DISTRICTS_SPG` (layer 748)
+HARP only creates geometry where a reasonable geographic basis exists.
+
+If no appropriate geometry can be established from the available information, the source is recorded as unresolved rather than assigned an arbitrary location.
+
+### Do not declare a search area
+
+A search area is a place to look, not an answer. Where a source resolves only
+to a parcel, a tenure holding or an operating area, that geometry is submitted
+for detection and is never itself declared.
+
+What is declared is the harvest detection found inside it, carrying whatever
+the search area could establish about it — a timber mark, a tenure holder, or
+the supplier alone.
+
+A supplier whose search area contained no detection in the period therefore
+contributes no declared geometry for that month. This is the intended result:
+nothing places a harvest there within the window being reported.
+
+### Require approval
+
+A monthly dataset is not promoted to the HARP library until it has been reviewed and approved.
+
+Completed runs enter:
+
+    pending
+
+Runs containing unresolved validation or processing issues enter:
+
+    quarantine
+
+These require review before they can proceed.
+
+---
+
+## Documentation
+
+`docs/HARP_Design_v0_7_0.md`
+
+Detailed description of the pipeline, resolution methods, precision tiers, and processing workflow.
+
+`docs/HPA1_Decisions_Log_v1_2.md`
+
+Record of significant design decisions, including the date, rationale, and any later reversals.
+
+`VERSION.md`
+
+Package change history.
+
+Document version numbers are maintained independently from the HARP package version.
+
+---
+
+## Licence
+
+Proprietary. NGIS internal use only.
+
+Contains information licensed under the Open Government Licence — British Columbia.
+
+County boundaries are sourced from the US Census Bureau.
+
+Forest boundaries are sourced from the USDA Forest Service.
+
+Forest Practices data is sourced from the Washington State Department of Natural Resources.
