@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 
 from . import (adapters, assemble, cache, config, detect, detection_api,
                areas as areas_stage,
+               eudr_schema,
                library as library_stage,
                lots as lots_stage,
                drop, identify, io,
@@ -383,6 +384,45 @@ def cmd_enrich(cfg, args) -> int:
     for k, n in kinds.most_common():
         _log(f"  {n:>7,}  {k}")
     _log(f"\n  {path}")
+    return 0
+
+
+def cmd_deliver(cfg, args) -> int:
+    """The four EUDR fields, and nothing else. For sending out.
+
+    Everything the pipeline knows stays in the library month. This is the
+    view of it a customer or a regulator sees.
+    """
+    src = args.source or _latest(
+        f"{cfg.paths.outbox}/harvest-{args.month}.geojson"
+        if args.month else f"{cfg.paths.outbox}/harvest-*.geojson")
+    if args.month and not src:
+        # Prefer the approved copy - a deliverable should come from a month
+        # somebody signed off, not from whatever is in the working folder.
+        opts = library_stage.settings(cfg)
+        shelved = os.path.join(opts["path"], args.month, "harvest.geojson")
+        if os.path.isfile(shelved):
+            src = shelved
+    if not src or not os.path.isfile(src):
+        _log("nothing to deliver. Run the month first.")
+        return 1
+
+    _log(f"from {src}")
+    with open(src, encoding="utf-8") as fh:
+        feats = json.load(fh).get("features") or []
+    view, report = eudr_schema.project(feats, log=_log)
+
+    stamp = args.month or datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = io.write_json(
+        f"{cfg.paths.outbox}/eudr-{stamp}.geojson",
+        {"type": "FeatureCollection", "name": "harp_eudr",
+         "features": view["features"]})
+    _log(f"\n  {path}")
+    if report.get("missing"):
+        _log("")
+        _log("  Some features carry fewer than four fields. A field is "
+             "omitted rather than sent blank, because a blank one fails "
+             "validation where a missing one only warns.")
     return 0
 
 
@@ -1293,6 +1333,13 @@ search areas nobody can declare.
     en.add_argument("--search", metavar="GLOB")
     en.add_argument("--harvest", metavar="GLOB")
     en.set_defaults(fn=cmd_enrich)
+
+    dl = sub.add_parser("deliver",
+                        help="the four EUDR fields and nothing else, for "
+                             "sending out")
+    dl.add_argument("--month", help="YYYY-MM")
+    dl.add_argument("--source", metavar="GEOJSON")
+    dl.set_defaults(fn=cmd_deliver)
 
     ar = sub.add_parser("areas",
                         help="operating areas stated by hand, for suppliers "

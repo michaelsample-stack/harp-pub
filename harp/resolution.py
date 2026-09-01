@@ -59,6 +59,43 @@ class Tier(str, Enum):
         }[self.value]
 
     @property
+    def producer_name(self) -> str:
+        """Who cut the wood, as the register spells it.
+
+        The tenure holder where a register named one; otherwise the client's
+        own name for the supplier. Never a bare supplier code - a code like
+        WWW reached a customer deliverable once, and it turned out to cover
+        six unrelated companies.
+
+        This is the EUDR field name deliberately, so it survives the eventual
+        schema refactor without being renamed.
+        """
+        if self.tenure_holder:
+            return self.tenure_holder
+        # The client's own name is a real answer where no register applies.
+        # A code is not - it identifies a purchasing arrangement rather than
+        # a company, and may not be one company at all.
+        name = (self.supplier_name or "").strip()
+        if name and name.upper() != (self.supplier_id or "").upper():
+            return name
+        return ""
+
+    @property
+    def producer_source(self) -> str:
+        """Where the producer name came from.
+
+        Recorded because the eventual refactor needs to know which names are
+        authoritative and which are the client's own. A register names who
+        held the tenure; the client names who they paid, and those are not
+        always the same party.
+        """
+        if self.tenure_holder:
+            return "forest register"
+        if self.producer_name:
+            return "client record"
+        return ""
+
+    @property
     def traceability(self) -> str:
         """How the geometry was reached, in one word.
 
@@ -227,6 +264,43 @@ class Resolution:
         it must not be presented as a plot.
         """
         return self.matched_rung == "R7"
+
+    @property
+    def producer_name(self) -> str:
+        """Who cut the wood, as the register spells it.
+
+        The tenure holder where a register named one; otherwise the client's
+        own name for the supplier. Never a bare supplier code - a code like
+        WWW reached a customer deliverable once, and it turned out to cover
+        six unrelated companies.
+
+        This is the EUDR field name deliberately, so it survives the eventual
+        schema refactor without being renamed.
+        """
+        if self.tenure_holder:
+            return self.tenure_holder
+        # The client's own name is a real answer where no register applies.
+        # A code is not - it identifies a purchasing arrangement rather than
+        # a company, and may not be one company at all.
+        name = (self.supplier_name or "").strip()
+        if name and name.upper() != (self.supplier_id or "").upper():
+            return name
+        return ""
+
+    @property
+    def producer_source(self) -> str:
+        """Where the producer name came from.
+
+        Recorded because the eventual refactor needs to know which names are
+        authoritative and which are the client's own. A register names who
+        held the tenure; the client names who they paid, and those are not
+        always the same party.
+        """
+        if self.tenure_holder:
+            return "forest register"
+        if self.producer_name:
+            return "client record"
+        return ""
 
     @property
     def traceability(self) -> str:

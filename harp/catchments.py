@@ -295,6 +295,7 @@ def operator_blocks(client_number: str, limit: int = 0,
             d = post("{}/{}/query".format(ROOT, BLOCKS), {
                 "where": where,
                 "outFields": ("OBJECTID,TIMBER_MARK,CLIENT_NAME,"
+                              "CLIENT_NUMBER,"
                               "GEOGRAPHIC_DISTRICT_CODE,FEATURE_AREA,"
                               "DISTURBANCE_START_DATE"),
                 "returnGeometry": "true", "outSR": 4326,
@@ -670,6 +671,14 @@ def build(sources, mills, aliases, radius_km, block_limit, identifiers=None,
                     feats.append(feature(b["geometry"], {
                         "harp_supplier": name, "harp_supplier_code": s["code"],
                         "harp_method": "operator tenure",
+                        # The block's own holder, not the alias we matched on.
+                        # They agree in the normal case, and where they differ
+                        # the register is right.
+                        "ProducerName": (at.get("CLIENT_NAME")
+                                         or a.client_name or ""),
+                        "harp_producer_number": (at.get("CLIENT_NUMBER")
+                                                 or a.client_number or ""),
+                        "harp_producer_source": "forest register",
                         "harp_source_system": "FTEN cut block register",
                         "harp_key": a.client_number,
                         "harp_key_name": a.client_name or at.get("CLIENT_NAME"),

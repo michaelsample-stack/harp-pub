@@ -51,8 +51,8 @@ from collections import Counter
 from datetime import datetime
 
 from . import (assemble, catchments, detect as detect_stage, detection_api,
-               identify, io, library as library_stage, manifest, mills,
-               package, router)
+               eudr_schema, identify, io, library as library_stage, manifest,
+               mills, package, router)
 from .sources import private_marks
 
 
@@ -65,6 +65,10 @@ MAX_BLOCK_HA = 2000.0
 # than omitted, so the two files have the same shape and a consumer never has
 # to check whether a key exists.
 SCHEMA = [
+    # The one EUDR-cased field. Carried from resolution rather than mapped at
+    # the end, so it is filled where the register knew a name and visibly
+    # empty where nothing did.
+    "ProducerName", "harp_producer_number", "harp_producer_source",
     "harp_supplier", "harp_supplier_code", "harp_jurisdiction",
     "harp_geometry_kind", "harp_method", "harp_source_system",
     "harp_key", "harp_key_name",
@@ -191,6 +195,15 @@ def _split(features: list[dict], max_block_ha: float,
 
         props = _normalise(p, {
             "harp_geometry_kind": kind,
+            # A search area has no producer of its own. Where the client's
+            # name for the supplier is a real name it stands in; a bare code
+            # does not, because a code can cover several companies.
+            "ProducerName": (p.get("ProducerName")
+                             or p.get("harp_tenure_holder") or ""),
+            "harp_producer_source": (p.get("harp_producer_source")
+                                     or ("forest register"
+                                         if p.get("harp_tenure_holder")
+                                         else "")),
             "harp_area_ha": round(area, 2),
             "harp_timber_mark": p.get("timber_mark") or p.get("TIMBER_MARK", ""),
             "harp_district": p.get("district")
@@ -714,8 +727,31 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
                 api_base, written, say, stage_cb)
             merged = outcome.pop("merged", [])
 
-    # ---- 8 to 11: validate, clean, stage ---------------------------------
+    # ---- 8 to 11: project, validate, clean, stage -------------------------
     if merged and stage:
+        # The EUDR view is built before validation, because validation checks
+        # those four fields and nothing else. A projection rather than a
+        # rename: the month keeps every harp_ field, and this is derived from
+        # it, so the record of how a producer name was arrived at survives.
+        say("\n" + "=" * 66)
+        say("8  EUDR FIELDS")
+        say("=" * 66)
+        merged, view_report = eudr_schema.add(merged, log=say)
+        outcome["eudr_missing"] = view_report.get("missing", {})
+        say("")
+        say("Added alongside the existing fields, not in place of them. The "
+            "validator reads only the four; everything else rides through and "
+            "is what a production lot is resolved against later.")
+        # Rewrite the month now it carries them, so what is on disk is what
+        # goes into the library.
+        written.append(_write(
+            "{}/harvest-{}.geojson".format(cfg.paths.outbox, month),
+            "harp_harvest", merged,
+            {"month": month, "features": len(merged),
+             "note": ("One month of harvest areas, carrying both the EUDR "
+                      "fields and the pipeline's own. Strip to the four with "
+                      "`harp deliver` before sending it anywhere.")}))
+
         stage_cb("validate", "running")
         opts = library_stage.settings(cfg)
         try:

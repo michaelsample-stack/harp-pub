@@ -37,7 +37,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import harp                                                    # noqa: E402
 from harp import (assemble, config, detect as detect_stage,    # noqa: E402
                   detection_api, io, library as library_stage,
-                  lots as lots_stage, mills as mills_mod, package,
+                  eudr_schema, lots as lots_stage, mills as mills_mod,
+                  package,
                   run as run_stage)
 from harp.resolution import Tier                               # noqa: E402
 
@@ -62,6 +63,7 @@ STAGES = [
     ("detect",   "Detect",       "submit and wait"),
     ("enrich",   "Join back",    "attribution recovered"),
     ("write",    "The month",    "one collection"),
+    ("eudr",     "EUDR fields",  "added, not substituted"),
     ("validate", "Validate",     "eudr_geojson, then clean"),
     ("stage",    "Stage",        "pending, awaiting approval"),
 ]
@@ -276,6 +278,12 @@ class App(tk.Tk):
                               "from either until it is on the shelf.",
                   foreground=MUTED, wraplength=1160,
                   justify="left").pack(anchor="w", padx=16, pady=(10, 2))
+        ttk.Label(parent, text="The deliverable carries only ProducerName, "
+                               "ProducerCountry, ProductionPlace and Area. "
+                               "Everything else the pipeline knows stays on "
+                               "the shelf.",
+                  foreground=MUTED, wraplength=1160,
+                  justify="left").pack(anchor="w", padx=16, pady=(0, 4))
 
         g = ttk.LabelFrame(parent, text="Shelf")
         g.pack(fill="x", **pad)
@@ -331,6 +339,9 @@ class App(tk.Tk):
         self.btn_promote = ttk.Button(r, text="Approve and shelve",
                                       command=self.do_promote)
         self.btn_promote.pack(side="left", padx=8)
+        self.btn_deliver = ttk.Button(r, text="Build the deliverable",
+                                      command=self.do_deliver)
+        self.btn_deliver.pack(side="left", padx=8)
         self.force = tk.BooleanVar(value=False)
         ttk.Checkbutton(r, text="even with findings outstanding",
                         variable=self.force).pack(side="left", padx=6)
@@ -486,8 +497,8 @@ class App(tk.Tk):
     def set_busy(self, on, note=""):
         self.busy = on
         state = "disabled" if on else "normal"
-        for name in ("btn_month", "btn_build", "btn_promote", "btn_walk",
-                     "btn_pkg"):
+        for name in ("btn_month", "btn_build", "btn_promote", "btn_deliver",
+                     "btn_walk", "btn_pkg"):
             if hasattr(self, name):
                 getattr(self, name).config(state=state)
         self.status.config(text=note or ("working…" if on else "ready"))
@@ -895,6 +906,65 @@ class App(tk.Tk):
             self.after(0, self.refresh_library)
 
         self.run_bg(work, "validating and cleaning…")
+
+    def do_deliver(self):
+        """The four EUDR fields, and nothing else.
+
+        Taken from the shelf rather than the outbox: a file going to a
+        customer should come from a month somebody approved, not from
+        whatever the last run happened to leave behind.
+        """
+        month = self.lib_month.get().strip()
+        if not month:
+            messagebox.showwarning("No month", "Which month?")
+            return
+        root = self.library_dir.get().strip()
+        src = os.path.join(root, month, "harvest.geojson")
+        approved = os.path.isfile(src)
+        if not approved:
+            src = os.path.join(self.cfg.paths.outbox,
+                               "harvest-{}.geojson".format(month))
+            if not os.path.isfile(src):
+                messagebox.showwarning(
+                    "Nothing to deliver",
+                    "No {} on the shelf and none in the outbox.".format(month))
+                return
+            if not messagebox.askyesno(
+                    "Not approved",
+                    "{} is not on the shelf.\n\nBuilding from the outbox "
+                    "copy instead. That month has not been approved by "
+                    "anybody.\n\nCarry on?".format(month)):
+                return
+
+        def work():
+            self.log("")
+            self.log("from {}{}".format(os.path.basename(src),
+                                        "" if approved else "  (NOT APPROVED)"))
+            with open(src, encoding="utf-8") as fh:
+                feats = json.load(fh).get("features") or []
+            view, report = eudr_schema.project(feats, log=self.log)
+            path = io.write_json(
+                "{}/eudr-{}.geojson".format(self.cfg.paths.outbox, month),
+                {"type": "FeatureCollection", "name": "harp_eudr",
+                 "features": view["features"]})
+            self.log("\n  {}".format(path))
+            miss = report.get("missing") or {}
+
+            def done():
+                note = "{:,} feature(s) written to eudr-{}.geojson.".format(
+                    len(view["features"]), month)
+                if miss:
+                    note += (" Some carry fewer than four fields — a field is "
+                             "omitted rather than sent blank, because a blank "
+                             "one fails validation where a missing one only "
+                             "warns.")
+                if not approved:
+                    note = "Built from an unapproved month. " + note
+                self.lib_note.config(text=note,
+                                     foreground=WARN if not approved else MUTED)
+            self.after(0, done)
+
+        self.run_bg(work, "building the deliverable…")
 
     def do_promote(self):
         month = self.lib_month.get().strip()

@@ -14,10 +14,10 @@ Client-agnostic. A client is a YAML file, not a code fork.
     outcome = validate.run(collection, country_iso2="CA")
     rows = [row for r in results for row in normalise.from_resolution(r)]
 
-See docs/HARP_Design_v0_7_0.md for the stage model and the precision tiers.
+See docs/HARP_Design_v0_8_0.md for the stage model and the precision tiers.
 """
 
-__version__ = "0.18.1"
+__version__ = "0.20.0"
 __author__ = "NGIS"
 
 from . import assemble, drop, identify, normalise, package, validate

@@ -371,11 +371,11 @@ These require review before they can proceed.
 
 ## Documentation
 
-`docs/HARP_Design_v0_7_0.md`
+`docs/HARP_Design_v0_8_0.md`
 
 Detailed description of the pipeline, resolution methods, precision tiers, and processing workflow.
 
-`docs/HPA1_Decisions_Log_v1_2.md`
+`docs/HPA1_Decisions_Log_v1_3.md`
 
 Record of significant design decisions, including the date, rationale, and any later reversals.
 

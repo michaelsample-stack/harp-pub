@@ -79,6 +79,12 @@ def _tag(res: Resolution, props: dict | None) -> dict:
         "harp_registry": res.registry,
         "harp_matched_rung": res.matched_rung,
         "harp_tenure_holder": res.tenure_holder,
+        # EUDR casing, and carried from here rather than mapped later. The
+        # client's own alias stays on harp_supplier alongside it, so a name
+        # that changed can always be traced back to the code it came from.
+        "ProducerName": res.producer_name,
+        "harp_producer_number": res.client_number,
+        "harp_producer_source": res.producer_source,
         "harp_land_type": res.land_type,
         "harp_district": res.district_name or res.district_code,
         "harp_jurisdiction": res.jurisdiction,

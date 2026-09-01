@@ -297,6 +297,11 @@ def enrich(tenure: list[dict], catchments: list[dict], detections: list[dict],
                     "harp_key": p.get("harp_key", ""),
                     "harp_key_name": p.get("harp_key_name", ""),
                     "harp_timber_mark": p.get("harp_timber_mark", ""),
+                    # Inherited with everything else. A detection inside a
+                    # tenure block belongs to whoever held that tenure.
+                    "ProducerName": p.get("ProducerName", ""),
+                    "harp_producer_number": p.get("harp_producer_number", ""),
+                    "harp_producer_source": p.get("harp_producer_source", ""),
                     "harp_district": p.get("harp_district", ""),
                     "harp_parent_kind": p.get("harp_geometry_kind", ""),
                     "harp_parent_area_ha": p.get("harp_area_ha", ""),
