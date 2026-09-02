@@ -1,4 +1,4 @@
-<img src="data/img/HarpLogo.png" alt="HARP" width="360">
+![HARP — Harvest Area Resolution Pipeline](data/img/HarpLogo.png)
 
 # HARP — Harvest Area Resolution Pipeline
 
