@@ -53,6 +53,7 @@ from datetime import datetime
 from . import (assemble, catchments, detect as detect_stage, detection_api,
                eudr_schema, identify, io, library as library_stage, manifest,
                mills, package, router)
+from .resolution import Tier
 from .sources import private_marks, producer_geodata
 
 
@@ -335,7 +336,7 @@ def _delivery_file(sorted_items: dict) -> str:
 
 
 def _detect_and_join(cfg, month, start, end, harvest, tenure, search, stamp,
-                     api_base, written, say, stage_cb) -> dict:
+                     out_dir, api_base, written, say, stage_cb) -> dict:
     """Union, submit, wait, join back, write the month.
 
     Returns what happened, including where it stopped. A run that could not
@@ -364,7 +365,7 @@ def _detect_and_join(cfg, month, start, end, harvest, tenure, search, stamp,
         return {"stopped_at": "union", "why": str(exc), "merged": []}
 
     union_path = _write(
-        "{}/search-union-{}.geojson".format(cfg.paths.outbox, stamp),
+        "{}/2-detection/submitted.geojson".format(out_dir),
         "harp_search_union", [feat],
         {"window": [start, end],
          "note": feat["properties"]["harp_note"]})
@@ -380,7 +381,7 @@ def _detect_and_join(cfg, month, start, end, harvest, tenure, search, stamp,
     stage_cb("detect", "running", "{} to {}".format(start[5:], end[5:]))
     try:
         feats, raw, summary = detection_api.run(
-            union_path, start, end, cfg.paths.outbox,
+            union_path, start, end, os.path.join(out_dir, "2-detection"),
             base=api_base or detection_api.DEFAULT_BASE, log=say)
     except detection_api.DetectionError as exc:
         first = str(exc).splitlines()[0]
@@ -403,7 +404,7 @@ def _detect_and_join(cfg, month, start, end, harvest, tenure, search, stamp,
                 "merged": []}
 
     det_path = _write(
-        "{}/detections-{}.geojson".format(cfg.paths.outbox, stamp),
+        "{}/2-detection/returned.geojson".format(out_dir),
         "harp_detections", feats,
         {"job": summary["job"], "window": [start, end],
          "raw": os.path.basename(summary["raw"])})
@@ -422,7 +423,7 @@ def _detect_and_join(cfg, month, start, end, harvest, tenure, search, stamp,
     stage_cb("enrich", "done", "{:,}".format(len(b) + len(c)))
 
     month_path = _write(
-        "{}/harvest-{}.geojson".format(cfg.paths.outbox, month),
+        "{}/3-month/harvest-{}.geojson".format(out_dir, month),
         "harp_harvest", merged,
         {"window": [start, end], "features": len(merged),
          "job": summary["job"],
@@ -444,6 +445,153 @@ def _detect_and_join(cfg, month, start, end, harvest, tenure, search, stamp,
     return {"stopped_at": "month written", "merged": merged,
             "detections": len(feats),
             "traceability": dict(trace)}
+
+
+# What each tier is, in one line, for the census printed before submission.
+TIER_BLURB = {
+    "P1a": ("finished", "a harvest block from the public forest register, "
+                        "named by a mark on the delivery"),
+    "P1b": ("to be searched", "the titled parcel a mark was scaled from - "
+                              "the ownership boundary, not the cut"),
+    "P1c": ("finished", "a harvest found inside one of those parcels"),
+    "P1d": ("finished", "a harvest area the producer declared in their own "
+                        "file, taken at their word"),
+    "P2a": ("to be searched", "a registered harvest area attributable to a "
+                              "supplier - everything they hold, not what they "
+                              "cut for us"),
+    "P2b": ("finished", "a harvest found inside one of those"),
+    "P3a": ("to be searched", "a district, county or national forest - a "
+                              "place to look and nothing more"),
+    "P3b": ("finished", "a harvest found inside one of those"),
+    "P4": ("unresolved", "nothing defensible could be established"),
+}
+
+
+def _month_census(merged, log) -> None:
+    """The finished month, by what each feature is.
+
+    Different from the census before submission: that one describes what was
+    about to be searched, this one describes what came back and is going
+    forward. A reader comparing the two sees what the round trip achieved.
+    """
+    from collections import Counter as _C
+    if not merged:
+        return
+    tiers = _C(f["properties"].get("harp_tier", "?") for f in merged)
+    trace = _C(f["properties"].get("harp_traceability", "?") for f in merged)
+    area = 0.0
+    for f in merged:
+        try:
+            area += float(f["properties"].get("harp_area_ha") or 0)
+        except (TypeError, ValueError):
+            pass
+
+    log("")
+    log("-" * 66)
+    log("THE MONTH, BEFORE VALIDATION")
+    log("-" * 66)
+    for tier, n in sorted(tiers.items()):
+        log("  {:<5}{:>8,}   {}".format(
+            tier, n, TIER_BLURB.get(tier, ("", "?"))[1]))
+    log("")
+    log("  " + ", ".join("{:,} {}".format(n, k)
+                         for k, n in trace.most_common()))
+    if area:
+        log("  {:,.0f} ha in total".format(area))
+
+    # A search tier here would mean a place to look had been carried into a
+    # declaration, which is the one thing the whole design is meant to prevent.
+    stragglers = {t: n for t, n in tiers.items()
+                  if TIER_BLURB.get(t, ("", ""))[0] == "to be searched"}
+    if stragglers:
+        log("")
+        log("  {} search tier(s) reached the month: {}".format(
+            sum(stragglers.values()),
+            ", ".join("{} {}".format(n, t) for t, n in stragglers.items())))
+        log("  A place to look is not a harvest. This should not happen.")
+
+    kinds = _C(f["properties"].get("harp_geometry_kind", "?") for f in merged)
+    log("")
+    log("  " + ", ".join("{:,} {}".format(n, k)
+                         for k, n in kinds.most_common(6)))
+
+
+def _census(harvest, tenure, search, unresolved, log) -> None:
+    """Everything about to go forward, by what it is.
+
+    Printed before submission because that is the last moment anybody can
+    look at the shape of a month and say no. After detection the numbers
+    change and the question becomes different.
+    """
+    from collections import Counter as _C
+    everything = list(harvest) + list(tenure) + list(search)
+    tiers = _C(f["properties"].get("harp_tier", "?") for f in everything)
+
+    log("\n" + "=" * 66)
+    log("WHAT IS READY")
+    log("=" * 66)
+
+    groups = [("finished", "declared as they stand - no detection needed"),
+              ("to be searched",
+               "submitted for detection; the harvest found inside is what "
+               "gets declared"),
+              ("unresolved", "no geometry, and a question for the client")]
+    for group, blurb in groups:
+        rows = [(t, n) for t, n in sorted(tiers.items())
+                if TIER_BLURB.get(t, ("", ""))[0] == group]
+        if group == "unresolved" and unresolved:
+            rows = [("P4", unresolved)]
+        if not rows:
+            continue
+        log("")
+        log("{}  -  {}".format(group.upper(), blurb))
+        for tier, n in rows:
+            log("  {:<5}{:>8,}   {}".format(
+                tier, n, TIER_BLURB.get(tier, ("", "?"))[1]))
+
+    unknown = [t for t in tiers if t not in TIER_BLURB]
+    if unknown:
+        log("")
+        log("  tiers nothing describes: {}".format(", ".join(sorted(unknown))))
+
+    notes = _C()
+    for f in everything:
+        note = str(f["properties"].get("harp_data_note") or "")
+        for part in note.split(";"):
+            part = part.strip()
+            if part:
+                # The first few words are enough to group by, and the full
+                # note stays on the feature.
+                notes[" ".join(part.split()[:6])] += 1
+    if notes:
+        log("")
+        log("FLAGGED  -  kept and carried forward, not dropped")
+        for label, n in notes.most_common(6):
+            log("  {:>8,}   {}".format(n, label))
+
+    ready = sum(n for t, n in tiers.items()
+                if TIER_BLURB.get(t, ("", ""))[0] == "finished")
+    searching = sum(n for t, n in tiers.items()
+                    if TIER_BLURB.get(t, ("", ""))[0] == "to be searched")
+    log("")
+    log("{:,} finished, {:,} to be searched, {:,} unresolved".format(
+        ready, searching, unresolved))
+    if searching:
+        log("Nothing in the middle group is declarable as it stands.")
+
+
+def run_folder(cfg, month: str, stamp: str) -> str:
+    """One folder per run, month first so a listing sorts usefully.
+
+    Every run is kept. They are cheap, and the one you want to look at is
+    usually the one before the one that worked.
+    """
+    short = stamp.split("-")[-1] if "-" in stamp else stamp
+    name = "{}_run-{}".format(month or stamp[:8], short)
+    path = os.path.join(cfg.paths.outbox, name)
+    for sub in ("1-resolved", "2-detection", "3-month"):
+        os.makedirs(os.path.join(path, sub), exist_ok=True)
+    return path
 
 
 def _write(path: str, name: str, feats: list[dict], extra: dict) -> str:
@@ -479,6 +627,7 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
     """
     stage_cb = on_stage or (lambda *_a, **_k: None)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = run_folder(cfg, month, stamp)
     run_rec = manifest.Run(cfg, "run", {"folder": folder})
     written, lines = [], []
 
@@ -590,7 +739,7 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
                            supplier=r.supplier_name)
 
     written.append(io.write_csv_dicts(
-        "{}/resolution-{}.csv".format(cfg.paths.outbox, stamp),
+        "{}/1-resolved/resolution.csv".format(out_dir),
         [r.row() for r in results]))
 
     collection, report = assemble.assemble(results)
@@ -690,7 +839,7 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
             declared, dec_report = [], {}
         if declared:
             written.append(_write(
-                "{}/declared-areas-{}.geojson".format(cfg.paths.outbox, stamp),
+                "{}/1-resolved/declared-areas.geojson".format(out_dir),
                 "harp_declared", declared,
                 {"month": month, "files": dec_report.get("files", 0),
                  "note": ("harvest areas the producer declared. Taken at "
@@ -736,7 +885,7 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
             ("search-areas", search,
              "places to look - detection has to find the harvest")):
         written.append(_write(
-            "{}/{}-{}.geojson".format(cfg.paths.outbox, name, stamp),
+            "{}/1-resolved/{}.geojson".format(out_dir, name),
             "harp_" + name.replace("-", "_"), fs,
             {"note": note, "purpose": why, "max_block_ha": max_block_ha}))
 
@@ -752,6 +901,9 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
             say("           {:<20}{:>7,}".format(k, n))
 
     stage_cb("split", "done", "{:,} + {:,}".format(len(harvest), len(tenure)))
+
+    _census(harvest, tenure, search,
+            sum(1 for r in results if r.tier is Tier.P4), say)
 
     # ---- 5 to 7: the detection round trip --------------------------------
     #
@@ -786,7 +938,7 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         else:
             outcome = _detect_and_join(
                 cfg, month, start, end, harvest, tenure, search, stamp,
-                api_base, written, say, stage_cb)
+                out_dir, api_base, written, say, stage_cb)
             merged = outcome.pop("merged", [])
 
     # ---- 8 to 11: project, validate, clean, stage -------------------------
@@ -798,6 +950,8 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         say("\n" + "=" * 66)
         say("8  EUDR FIELDS")
         say("=" * 66)
+        _month_census(merged, say)
+        say("")
         merged, view_report = eudr_schema.add(merged, log=say)
         outcome["eudr_missing"] = view_report.get("missing", {})
         say("")
@@ -807,7 +961,7 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         # Rewrite the month now it carries them, so what is on disk is what
         # goes into the library.
         written.append(_write(
-            "{}/harvest-{}.geojson".format(cfg.paths.outbox, month),
+            "{}/3-month/harvest-{}.geojson".format(out_dir, month),
             "harp_harvest", merged,
             {"month": month, "features": len(merged),
              "note": ("One month of harvest areas, carrying both the EUDR "
@@ -821,7 +975,7 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
                 opts["path"], month, merged,
                 _delivery_file(sorted_items), opts,
                 source_files=[os.path.basename(w) for w in written[-2:]],
-                log=say)
+                run_id=stamp.split("-")[-1], log=say)
             outcome["library_state"] = built["state"]
             stage_cb("validate", "done" if built["state"] == "pending"
                      else "empty",
@@ -851,7 +1005,42 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         run_rec.output(w)
     row = run_rec.finish()
 
-    log_path = "{}/run-{}.txt".format(cfg.paths.outbox, stamp)
+    # A short summary beside the full log. The log is what happened; this is
+    # what came out and what is outstanding.
+    try:
+        with open(os.path.join(out_dir, "summary.txt"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("{}  {}\n".format(month or "no month", stamp))
+            fh.write("{}\n\n".format(cfg.label))
+            fh.write("got as far as: {}\n".format(outcome["stopped_at"]))
+            if outcome.get("why"):
+                fh.write("  {}\n".format(outcome["why"]))
+            fh.write("\n{:>8,}  sources\n".format(len(results)))
+            fh.write("{:>8,}  harvest areas, finished\n".format(len(harvest)))
+            fh.write("{:>8,}  tenure blocks, to be searched\n".format(
+                len(tenure)))
+            fh.write("{:>8,}  search areas, to be searched\n".format(
+                len(search)))
+            if outcome.get("detections"):
+                fh.write("{:>8,}  detections returned\n".format(
+                    outcome["detections"]))
+            if merged:
+                fh.write("{:>8,}  in the month\n".format(len(merged)))
+            state = outcome.get("library_state")
+            if state:
+                fh.write("\nthe month is {}\n".format(state))
+                if state == "pending":
+                    fh.write("  harp library promote --month {} --who <you>\n"
+                             .format(month))
+                elif state == "quarantine":
+                    fh.write("  see the quarantine folder - it needs work, "
+                             "not another pass\n")
+            fh.write("\nfiles are under 1-resolved, 2-detection and "
+                     "3-month.\nrun.log has everything, in order.\n")
+    except Exception:
+        pass
+
+    log_path = "{}/run.log".format(out_dir)
     try:
         with open(log_path, "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines))

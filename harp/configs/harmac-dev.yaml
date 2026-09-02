@@ -26,6 +26,11 @@ sources:
     # intent is a service that promotes clean months itself; until the
     # cleaner is tuned for this data rather than for supplier submissions, a
     # human looks first.
+    # Outside the library. The library is an archive of finished months and
+    # nothing in it should need qualifying; a month that failed validation is
+    # a work item and belongs where work items live.
+    quarantine: ../harp-quarantine
+
     require_approval: true
 
     # Validate, clean, validate again, up to this many rounds. Required

@@ -20,13 +20,16 @@ all four are in there. The library holds the one that was right.
 
 THREE STATES, NOT TWO
 ---------------------
-    working    data/outbox        runs, reruns, experiments
-    pending    <library>/pending  been through the cycle, waiting on a person
-    library    <library>/YYYY-MM  approved
+    working     data/outbox/<month>_run-<n>   runs, reruns, experiments
+    pending     <library>/pending/YYYY-MM     waiting on a person
+    library     <library>/YYYY-MM             approved
+    quarantine  <quarantine>/YYYY-MM_run-<n>  needs hands on it
 
-A fourth exists for the cases that will not come good on their own:
-
-    quarantine <library>/quarantine  needs hands on it
+**Quarantine is outside the library**, not a folder within it. The library is
+an archive of finished months and nothing in it should need qualifying; a month
+that failed validation is a work item and belongs where work items live. Its
+own top-level path, keyed by run rather than by month, because a month can fail
+more than once.
 
 That is not a failure state so much as an admission. Early months will contain
 geometry the automated cleaner cannot fix, and a month sitting in quarantine
@@ -90,29 +93,39 @@ def settings(cfg) -> dict:
     }
     out["path"] = os.path.abspath(os.path.expandvars(
         os.path.expanduser(out["path"])))
+    q = lib.get("quarantine")
+    out["quarantine"] = os.path.abspath(os.path.expandvars(
+        os.path.expanduser(q))) if q else _dirs(out["path"])["quarantine"]
     return out
 
 
-def _dirs(root: str) -> dict:
+def _dirs(root: str, quarantine: str = "") -> dict:
     return {"root": root,
             "pending": os.path.join(root, "pending"),
-            "quarantine": os.path.join(root, "quarantine")}
+            # Alongside the library rather than inside it, unless configured
+            # elsewhere. See the note at the top.
+            "quarantine": quarantine or os.path.join(
+                os.path.dirname(root.rstrip(os.sep)) or ".",
+                "harp-quarantine")}
 
 
 # ──────────────────────────────── reading ──────────────────────────────────
 
-def months(root: str) -> list[dict]:
+def months(root: str, quarantine: str = "") -> list[dict]:
     """What is on the shelf, and what is waiting."""
     out = []
     if not os.path.isdir(root):
         return out
-    d = _dirs(root)
+    d = _dirs(root, quarantine)
     for state, base in (("library", root), ("pending", d["pending"]),
                         ("quarantine", d["quarantine"])):
         if not os.path.isdir(base):
             continue
         for name in sorted(os.listdir(base)):
-            if not MONTH.match(name):
+            # A quarantined folder is `YYYY-MM_run-nnnnnn`; the others are
+            # plain months.
+            month_part = name.split("_")[0]
+            if not MONTH.match(month_part):
                 continue
             path = os.path.join(base, name)
             if not os.path.isdir(path):
@@ -125,7 +138,8 @@ def months(root: str) -> list[dict]:
                         man = json.load(fh)
                 except Exception:
                     man = {}
-            out.append({"month": name, "state": state, "path": path,
+            out.append({"month": month_part, "folder": name,
+                        "state": state, "path": path,
                         "features": man.get("features"),
                         "approved_by": man.get("approved_by"),
                         "findings": man.get("findings_remaining"),
@@ -133,22 +147,33 @@ def months(root: str) -> list[dict]:
     return out
 
 
-def read_month(root: str, month: str, log=print) -> list[dict]:
+def read_month(root: str, month: str, quarantine: str = "",
+               log=print) -> list[dict]:
     """A month's geometry, from the library only.
 
     Deliberately does not fall back to pending. A lot resolved against an
     unapproved month would look identical to one resolved against an approved
     one, and the difference matters.
     """
-    path = os.path.join(root, month, "harvest.geojson")
+    path = os.path.join(root, month, "harvest-{}.geojson".format(month))
     if not os.path.isfile(path):
-        d = _dirs(root)
-        for state in ("pending", "quarantine"):
-            if os.path.isdir(os.path.join(d[state], month)):
-                raise FileNotFoundError(
-                    "{} is in {}, not the library. It has not been approved, "
-                    "so nothing should be declared from it yet.".format(
-                        month, state))
+        # A month approved before the naming changed.
+        legacy = os.path.join(root, month, "harvest.geojson")
+        if os.path.isfile(legacy):
+            path = legacy
+    if not os.path.isfile(path):
+        d = _dirs(root, quarantine)
+        if os.path.isdir(os.path.join(d["pending"], month)):
+            raise FileNotFoundError(
+                "{} is pending, not on the shelf. It has not been approved, "
+                "so nothing should be declared from it yet.".format(month))
+        if os.path.isdir(d["quarantine"]):
+            for name in os.listdir(d["quarantine"]):
+                if name.startswith(month):
+                    raise FileNotFoundError(
+                        "{} is in quarantine with findings outstanding. It "
+                        "needs work before it can be declared from.".format(
+                            month))
         raise FileNotFoundError(
             "no month {} in the library at {}".format(month, root))
     with open(path, encoding="utf-8") as fh:
@@ -245,7 +270,7 @@ def cycle(features: list[dict], max_passes: int, clean_opts: dict,
 
 def build(root: str, month: str, features: list[dict], deliveries_path: str,
           opts: dict, source_files: list[str] | None = None,
-          log=print) -> dict:
+          run_id: str = "", log=print) -> dict:
     """Take a raw month through the cycle and stage it.
 
     Lands in pending if it comes out clean, quarantine if it does not.
@@ -257,12 +282,24 @@ def build(root: str, month: str, features: list[dict], deliveries_path: str,
     out = cycle(features, opts["max_passes"], opts["clean"],
                 opts["country_iso2"], log=log)
 
-    d = _dirs(root)
+    d = _dirs(root, opts.get("quarantine", ""))
     state = "pending" if out["ok"] else "quarantine"
-    dest = os.path.join(d[state], month)
+    if state == "quarantine":
+        # Keyed by run, because a month can fail more than once and each
+        # attempt is worth keeping.
+        dest = os.path.join(d["quarantine"],
+                            "{}_run-{}".format(month, run_id or
+                                               datetime.now().strftime("%H%M%S")))
+    else:
+        dest = os.path.join(d["pending"], month)
     os.makedirs(dest, exist_ok=True)
 
-    with open(os.path.join(dest, "harvest.geojson"), "w",
+    # Named for what it is and what state it is in. `harvest.geojson` in a
+    # folder somebody has moved says nothing; this says both.
+    fname = ("harvest-{}-QUARANTINED.geojson".format(month)
+             if state == "quarantine" else "harvest-{}-pending.geojson".format(
+                 month))
+    with open(os.path.join(dest, fname), "w",
               encoding="utf-8") as fh:
         json.dump({"type": "FeatureCollection", "name": "harp_harvest",
                    "features": out["features"]}, fh)
@@ -297,9 +334,31 @@ def build(root: str, month: str, features: list[dict], deliveries_path: str,
         json.dump(manifest, fh, indent=2)
 
     if out["findings"]:
-        with open(os.path.join(dest, "findings.json"), "w",
-                  encoding="utf-8") as fh:
+        # Named for what they are. On a month that passed these are
+        # Recommended findings that were reported and carried through; on one
+        # that did not they are what stopped it.
+        fn = ("findings-blocking.json" if state == "quarantine"
+              else "findings-advisory.json")
+        with open(os.path.join(dest, fn), "w", encoding="utf-8") as fh:
             json.dump(out["findings"], fh, indent=2)
+    if state == "quarantine" and out["findings"]:
+        # Only where something actually went wrong. A month that passed still
+        # records its Recommended findings in findings.json, but calling that
+        # "what went wrong" would be untrue and would train people to ignore
+        # the file.
+        with open(os.path.join(dest, "what-went-wrong.txt"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("{}  -  {} Required finding(s) still standing after {} "
+                     "cleaning pass(es)\n\n".format(
+                         month, out["required"], out["passes"]))
+            by = Counter("{}  {}".format(f.get("error_code", "?"),
+                                         str(f.get("label", ""))[:60])
+                         for f in out["findings"])
+            for label, n in by.most_common():
+                fh.write("{:>7,}  {}\n".format(n, label))
+            fh.write("\nThe geometry is in {}. It is not wrong so much as "
+                     "unfinished - fix these and it can be promoted.\n"
+                     .format(fname))
 
     log("")
     if out["ok"]:
@@ -316,13 +375,17 @@ def build(root: str, month: str, features: list[dict], deliveries_path: str,
 
 
 def promote(root: str, month: str, who: str, force: bool = False,
-            log=print) -> str:
+            quarantine: str = "", log=print) -> str:
     """Move a month from pending onto the shelf."""
-    d = _dirs(root)
+    d = _dirs(root, quarantine)
     src = os.path.join(d["pending"], month)
     if not os.path.isdir(src):
-        q = os.path.join(d["quarantine"], month)
-        if os.path.isdir(q):
+        q = ""
+        if os.path.isdir(d["quarantine"]):
+            hits = sorted(n for n in os.listdir(d["quarantine"])
+                          if n.startswith(month))
+            q = os.path.join(d["quarantine"], hits[-1]) if hits else ""
+        if q:
             if not force:
                 raise RuntimeError(
                     "{} is in quarantine, not pending. It still has Required "
@@ -344,6 +407,15 @@ def promote(root: str, month: str, who: str, force: bool = False,
 
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
     shutil.move(src, dest)
+
+    # On the shelf a month is finished, so the file says so rather than
+    # carrying the state it was in on the way there.
+    final = os.path.join(dest, "harvest-{}.geojson".format(month))
+    for name in os.listdir(dest):
+        if name.startswith("harvest-") and name.endswith(".geojson") \
+                and os.path.join(dest, name) != final:
+            os.replace(os.path.join(dest, name), final)
+            break
 
     mp = os.path.join(dest, "manifest.json")
     man = {}

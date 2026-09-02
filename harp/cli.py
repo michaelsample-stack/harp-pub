@@ -515,7 +515,7 @@ def cmd_library(cfg, args) -> int:
     root = args.library or opts["path"]
 
     if args.action in (None, "list"):
-        rows = library_stage.months(root)
+        rows = library_stage.months(root, opts.get("quarantine", ""))
         _log(f"library at {root}")
         if not rows:
             _log("  nothing on the shelf yet")
@@ -578,6 +578,7 @@ def cmd_library(cfg, args) -> int:
             return 1
         try:
             library_stage.promote(root, args.month, who, force=args.force,
+                                  quarantine=opts.get("quarantine", ""),
                                   log=_log)
         except RuntimeError as exc:
             _log(str(exc))
@@ -710,7 +711,9 @@ def cmd_lot(cfg, args) -> int:
     shelf, missing = {}, []
     for m in wanted:
         try:
-            shelf[m] = library_stage.read_month(root, m, log=_log)
+            shelf[m] = library_stage.read_month(root, m,
+                                               opts.get("quarantine", ""),
+                                               log=_log)
         except FileNotFoundError as exc:
             missing.append(str(exc))
     if missing:

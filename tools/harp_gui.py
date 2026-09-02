@@ -90,7 +90,13 @@ class App(tk.Tk):
         self.drop_dir = tk.StringVar(value="")
         self.register_file = tk.StringVar(value="")
         self.mills_file = tk.StringVar(value="")
-        self.month = tk.StringVar(value="")
+        # A range rather than a single month. A run still declares for one
+        # month, but the detection window can reach back further - which is
+        # what a lot spanning two months needs.
+        self.from_month = tk.StringVar(value="")
+        self.from_year = tk.StringVar(value="")
+        self.to_month = tk.StringVar(value="")
+        self.to_year = tk.StringVar(value="")
         self.max_block = tk.StringVar(value="2000")
         self.api_base = tk.StringVar(value=detection_api.DEFAULT_BASE)
         self.library_dir = tk.StringVar(value="")
@@ -188,21 +194,40 @@ class App(tk.Tk):
         self.drop_note.pack(anchor="w", padx=10, pady=(2, 0))
 
         r = ttk.Frame(g)
-        r.pack(fill="x", padx=10, pady=(6, 10))
+        r.pack(fill="x", padx=10, pady=(6, 2))
         ttk.Label(r, text="Detection window", width=17).pack(side="left")
-        ttk.Entry(r, textvariable=self.month, width=12).pack(side="left")
-        ttk.Label(r, text="YYYY-MM", foreground=MUTED).pack(side="left",
-                                                            padx=6)
-        for label, back in (("this", 0), ("last", 1), ("−2", 2), ("−3", 3)):
-            ttk.Button(r, text=label, width=6,
+        months = ["{:02d}".format(m) for m in range(1, 13)]
+        years = [str(y) for y in range(date.today().year - 4,
+                                       date.today().year + 2)]
+        ttk.Combobox(r, textvariable=self.from_month, values=months,
+                     width=4, state="readonly").pack(side="left")
+        ttk.Combobox(r, textvariable=self.from_year, values=years,
+                     width=6, state="readonly").pack(side="left", padx=(3, 0))
+        ttk.Label(r, text="to").pack(side="left", padx=8)
+        ttk.Combobox(r, textvariable=self.to_month, values=months,
+                     width=4, state="readonly").pack(side="left")
+        ttk.Combobox(r, textvariable=self.to_year, values=years,
+                     width=6, state="readonly").pack(side="left", padx=(3, 0))
+        for label, back in (("this month", 0), ("last month", 1),
+                            ("last 3", 3)):
+            ttk.Button(r, text=label, width=11,
                        command=lambda b=back: self.set_month(b)).pack(
-                           side="left", padx=2)
-        ttk.Label(r, text="blank stops after the split",
-                  foreground=MUTED).pack(side="left", padx=12)
-        ttk.Label(r, text="blocks over").pack(side="left", padx=(20, 4))
+                           side="left", padx=3)
+        ttk.Button(r, text="clear", width=6,
+                   command=self.clear_month).pack(side="left", padx=3)
+
+        r = ttk.Frame(g)
+        r.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Label(r, text="", width=17).pack(side="left")
+        self.window_note = ttk.Label(r, text="", foreground=MUTED)
+        self.window_note.pack(side="left")
+        ttk.Label(r, text="blocks over").pack(side="left", padx=(24, 4))
         ttk.Entry(r, textvariable=self.max_block, width=7).pack(side="left")
         ttk.Label(r, text="ha are search areas",
                   foreground=MUTED).pack(side="left", padx=4)
+        for v in (self.from_month, self.from_year, self.to_month,
+                  self.to_year):
+            v.trace_add("write", lambda *_a: self._describe_window())
 
         r = ttk.Frame(parent)
         r.pack(fill="x", **pad)
@@ -735,24 +760,61 @@ class App(tk.Tk):
                   filetypes=[("Excel", "*.xlsx"), ("All", "*.*")])
 
     def set_month(self, back):
+        """A window ending this month and reaching back `back` months."""
         t = date.today()
         y, m = t.year, t.month - back
         while m < 1:
             m += 12
             y -= 1
-        self.month.set("{}-{:02d}".format(y, m))
-        self.lib_month.set(self.month.get())
+        self.from_year.set(str(y))
+        self.from_month.set("{:02d}".format(m))
+        self.to_year.set(str(t.year))
+        self.to_month.set("{:02d}".format(t.month))
+        self.lib_month.set("{}-{:02d}".format(t.year, t.month))
+
+    def clear_month(self):
+        for v in (self.from_month, self.from_year, self.to_month,
+                  self.to_year):
+            v.set("")
+
+    def _describe_window(self):
+        start, end = self._window()
+        if not (start and end):
+            self.window_note.config(
+                text="blank stops after the split — nothing declarable",
+                foreground=MUTED)
+            return
+        months = self._months_in_window()
+        self.window_note.config(
+            text="{} to {}   ·   declares for {}   ·   {} month(s)".format(
+                start, end, self._declared_month(), months),
+            foreground=MUTED)
+
+    def _declared_month(self):
+        """The month a run produces. The last in the window."""
+        y, m = self.to_year.get().strip(), self.to_month.get().strip()
+        return "{}-{}".format(y, m) if y and m else ""
+
+    def _months_in_window(self):
+        try:
+            a = int(self.from_year.get()) * 12 + int(self.from_month.get())
+            b = int(self.to_year.get()) * 12 + int(self.to_month.get())
+            return max(0, b - a + 1)
+        except ValueError:
+            return 0
 
     def _window(self):
-        m = self.month.get().strip()
-        if not m:
-            return "", ""
+        """The first day of the from-month to the last day of the to-month."""
         try:
-            y, mo = (int(x) for x in m.split("-")[:2])
+            fy, fm = int(self.from_year.get()), int(self.from_month.get())
+            ty, tm = int(self.to_year.get()), int(self.to_month.get())
         except ValueError:
             return "", ""
-        first = date(y, mo, 1)
-        last = date(y + (mo == 12), (mo % 12) + 1, 1) - timedelta(days=1)
+        first = date(fy, fm, 1)
+        last = date(ty + (tm == 12), (tm % 12) + 1, 1) - timedelta(days=1)
+        if last < first:
+            # Backwards. Better to say nothing than to silently swap them.
+            return "", ""
         return first.isoformat(), last.isoformat()
 
     # ──────────────────────────────────────────────────────── the work
@@ -861,10 +923,13 @@ class App(tk.Tk):
         if not self.cfg:
             messagebox.showwarning("No config", "Choose a config first.")
             return
-        month = self.month.get().strip()
         start, end = self._window()
-        if month and not start:
-            messagebox.showwarning("Check the month", "Wants YYYY-MM.")
+        month = self._declared_month() if start else ""
+        if (self.from_month.get() or self.to_month.get()) and not start:
+            messagebox.showwarning(
+                "Check the window",
+                "Both a from and a to month, and the to must not be before "
+                "the from.")
             return
 
         try:
@@ -967,7 +1032,8 @@ class App(tk.Tk):
         root = self.library_dir.get().strip()
         if not root or not os.path.isdir(root):
             return
-        rows = library_stage.months(root)
+        opts = library_stage.settings(self.cfg) if self.cfg else {}
+        rows = library_stage.months(root, opts.get("quarantine", ""))
         for r in sorted(rows, key=lambda x: (x["month"], x["state"]),
                         reverse=True):
             m = r["manifest"] or {}
@@ -997,9 +1063,11 @@ class App(tk.Tk):
             return
         opts = library_stage.settings(self.cfg)
         root = self.library_dir.get().strip() or opts["path"]
-        src = "{}/harvest-{}.geojson".format(self.cfg.paths.outbox, month)
-        if not os.path.isfile(src):
-            hits = sorted(glob.glob("{}/harvest-*.geojson".format(
+        hits = sorted(glob.glob("{}/{}_run-*/3-month/harvest-{}.geojson"
+                                .format(self.cfg.paths.outbox, month, month)))
+        src = hits[-1] if hits else ""
+        if not src:
+            hits = sorted(glob.glob("{}/*/3-month/harvest-*.geojson".format(
                 self.cfg.paths.outbox)))
             if not hits:
                 messagebox.showwarning(
@@ -1033,12 +1101,18 @@ class App(tk.Tk):
             messagebox.showwarning("No month", "Which month?")
             return
         root = self.library_dir.get().strip()
-        src = os.path.join(root, month, "harvest.geojson")
+        src = os.path.join(root, month, "harvest-{}.geojson".format(month))
+        if not os.path.isfile(src):
+            legacy = os.path.join(root, month, "harvest.geojson")
+            src = legacy if os.path.isfile(legacy) else src
         approved = os.path.isfile(src)
         if not approved:
-            src = os.path.join(self.cfg.paths.outbox,
-                               "harvest-{}.geojson".format(month))
-            if not os.path.isfile(src):
+            # Fall back to the newest run folder for that month.
+            hits = sorted(glob.glob("{}/{}_run-*/3-month/harvest-{}.geojson"
+                                    .format(self.cfg.paths.outbox, month,
+                                            month)))
+            src = hits[-1] if hits else ""
+            if not src:
                 messagebox.showwarning(
                     "Nothing to deliver",
                     "No {} on the shelf and none in the outbox.".format(month))
@@ -1091,7 +1165,9 @@ class App(tk.Tk):
             return
         root = self.library_dir.get().strip()
         try:
+            opts = library_stage.settings(self.cfg) if self.cfg else {}
             library_stage.promote(root, month, who, force=self.force.get(),
+                                  quarantine=opts.get("quarantine", ""),
                                   log=self.log)
         except RuntimeError as exc:
             messagebox.showwarning("Not promoted", str(exc))
@@ -1162,7 +1238,9 @@ class App(tk.Tk):
             shelf, missing = {}, []
             for m in wanted:
                 try:
-                    shelf[m] = library_stage.read_month(root, m, log=self.log)
+                    opts = library_stage.settings(self.cfg)
+                    shelf[m] = library_stage.read_month(
+                        root, m, opts.get("quarantine", ""), log=self.log)
                 except FileNotFoundError as exc:
                     missing.append(str(exc))
             if missing:

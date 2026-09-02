@@ -1,6 +1,6 @@
 [project]
 name = "harp"
-version = "0.21.0"
+version = "0.22.1"
 description = "Harvest Area Resolution Pipeline - resolves harvest geometry for EUDR due diligence"
 requires-python = ">=3.10"
 dependencies = [

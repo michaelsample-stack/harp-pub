@@ -16,11 +16,23 @@ The resulting geometries are attributed, consolidated, cleaned, and validated fo
 
 ### Monthly
 
+Each run writes to its own folder under `data/outbox`, named for the month and
+the run:
+
+    2026-07_run-114328/
+      run.log                     everything, in order
+      summary.txt                 what came out, and what is outstanding
+      1-resolved/                 resolution.csv and the split geometry
+      2-detection/                what was submitted, and what came back
+      3-month/                    the consolidated month
+
+Runs are kept. They can be removed by hand.
+
 | File | Description |
 |---|---|
-| `harvest-YYYY-MM.geojson` | Consolidated harvest geometry for the month, including precision tier, traceability method, and supporting attributes |
-| `resolution-*.csv` | One row per supply source showing how it was resolved |
-| `run-*.txt` | Processing log for the run |
+| `3-month/harvest-YYYY-MM.geojson` | Consolidated harvest geometry for the month, including precision tier, traceability method, and supporting attributes |
+| `1-resolved/resolution.csv` | One row per supply source showing how it was resolved |
+| `run.log` | Processing log for the run |
 
 ### Production lot
 
@@ -132,6 +144,21 @@ Depending on the source, this may include:
 
 Where no usable geographic boundary is available, no geometry is created and the source is recorded as unresolved.
 
+### 3b. Producer-declared areas
+
+Where the drop contains harvest areas a producer exported themselves, they are
+read here and join the resolved geometry. They need no search area and no
+detection.
+
+Files are recognised by their structure rather than their supplier, and they
+are deduplicated: one batch held 1,450 features and 370 distinct ones, because
+a block feeding several booms is exported once per boom. Longitude given in
+0–360 convention is normalised. Points without boundaries, slivers and reversed
+dates are annotated rather than dropped.
+
+A feature belongs to every month it had production in, so a block consumed
+across three months appears in all three.
+
 ### 4. Split
 
 Geometry is separated into three groups:
@@ -156,6 +183,15 @@ HARP spatially joins the returned detections against the supplier-specific input
 
 The original supplier geometries are therefore retained separately from the combined detection submission.
 
+### 6b. What is ready
+
+Before anything is submitted, the run reports everything it holds by category:
+what is finished and needs no detection, what will be searched, what did not
+resolve, and what has been flagged and carried forward anyway.
+
+This is the last point at which the shape of a month can be reviewed before the
+numbers change.
+
 ### 7. Validate and stage
 
 The resulting harvest dataset is:
@@ -179,6 +215,7 @@ Each feature carries a precision tier describing how closely the source has been
 | P1a | Harvest block identified directly from a public forest record | direct |
 | P1b | Titled parcel associated with a timber mark from the client's delivery record | direct |
 | P1c | Harvest detected within that parcel | direct |
+| P1d | Harvest area supplied directly by the producer | declared |
 | P2a | Registered harvest or tenure area associated with a supplier | indirect |
 | P2b | Harvest detected within that registered area | indirect |
 | P3a | Broader search area such as an operating area, district, county, or national forest | inferred |
@@ -201,6 +238,17 @@ P1b represents a parcel associated directly with a timber mark. The parcel is tr
 
 P1c is the harvest detected within that parcel.
 
+P1d is a boundary the producer supplied themselves, in their own file. It is
+taken at their word: they are asserting they harvested here, and that assertion
+is the evidence. Nothing about it is checked against a register.
+
+Not for lack of trying. Across one batch of 211 supplier files, only a third of
+the timber marks appeared in the BC tenure register at all — because the largest
+suppliers work private fee-simple land that sits outside Crown tenure by
+definition. Where a mark does resolve the geometry matches almost exactly, so
+the register is retained for one purpose: finding a producer name better than a
+placeholder.
+
 ### P2
 
 P2 represents supplier-level geometry derived from external records.
@@ -214,6 +262,13 @@ P3 is used where more precise resolution is not possible.
 A broader known operating or supply area is used as the search boundary, and detected harvest within that boundary becomes the resulting harvest geometry.
 
 ### Traceability
+
+| | |
+|---|---|
+| direct | reached from an identifier on the delivery |
+| declared | the producer supplied the boundary and stands behind it |
+| indirect | reached through the company rather than the delivery |
+| inferred | an area, or a detection within one |
 
 Traceability describes how geometry was associated with the supply source.
 
@@ -363,11 +418,17 @@ Completed runs enter:
 
     pending
 
-Runs containing unresolved validation or processing issues enter:
+Months containing unresolved validation findings are quarantined instead, in
+their own location outside the library:
 
-    quarantine
+    <quarantine>/2026-05_run-120114/
+      harvest-2026-05-QUARANTINED.geojson
+      findings-blocking.json
+      what-went-wrong.txt
 
-These require review before they can proceed.
+The library is an archive of finished months and nothing in it should need
+qualifying. A month that failed validation is a work item, and it is named for
+its state so that a file moved out of context still explains itself.
 
 ---
 
