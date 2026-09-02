@@ -53,7 +53,7 @@ from datetime import datetime
 from . import (assemble, catchments, detect as detect_stage, detection_api,
                eudr_schema, identify, io, library as library_stage, manifest,
                mills, package, router)
-from .sources import private_marks
+from .sources import private_marks, producer_geodata
 
 
 # A polygon larger than this is not behaving like a cut block. BC coastal
@@ -65,10 +65,12 @@ MAX_BLOCK_HA = 2000.0
 # than omitted, so the two files have the same shape and a consumer never has
 # to check whether a key exists.
 SCHEMA = [
-    # The one EUDR-cased field. Carried from resolution rather than mapped at
-    # the end, so it is filled where the register knew a name and visibly
-    # empty where nothing did.
-    "ProducerName", "harp_producer_number", "harp_producer_source",
+    # The EUDR-cased fields, carried from resolution rather than mapped at
+    # the end, so they are filled where something knew and visibly empty where
+    # nothing did. ProducerCountry is here because a producer's own file
+    # states it and there is no reason to rediscover it from the jurisdiction.
+    "ProducerName", "ProducerCountry",
+    "harp_producer_number", "harp_producer_source",
     "harp_supplier", "harp_supplier_code", "harp_jurisdiction",
     "harp_geometry_kind", "harp_method", "harp_source_system",
     "harp_key", "harp_key_name",
@@ -76,10 +78,16 @@ SCHEMA = [
     "harp_area_ha",
     "harp_tier", "harp_is_envelope", "harp_traceability",
     "harp_declared_by_supplier", "harp_basis", "harp_note",
+    # Only a producer's own file carries these. Empty elsewhere, and that is
+    # the point - the shared schema means a consumer never has to ask which
+    # route produced a feature.
+    "harp_production_from", "harp_production_to", "harp_production_months",
+    "harp_volume_m3", "harp_species", "harp_boom", "harp_source_file",
+    "harp_data_note",
 ]
 
 # Discrete, resolved from an identifier, and the harvest itself. Finished.
-HARVEST_KINDS = {"cut_block"}
+HARVEST_KINDS = {"cut_block", "producer_declared"}
 # A titled parcel is the land a mark was scaled from, not the cut. A 41 ha
 # median with a tail to 1,900 means declaring the parcel over-declares by a
 # long way - across one month, 303,000 ha of parcel against 71,000 ha of
@@ -143,6 +151,8 @@ def _kind_of(props: dict) -> str:
         return KIND_FROM_METHOD[method]
 
     tier = str(props.get("harp_tier", "")).strip()
+    if tier == "P1d":
+        return "producer_declared"
     if tier.startswith("P2"):
         # Attributable to a supplier, not to a purchase. A real register
         # block, but everything that company cut.
@@ -264,7 +274,8 @@ def _split(features: list[dict], max_block_ha: float,
     # kind and the tier have drifted apart again, which is exactly how 2,694
     # tenure blocks were nearly declared as harvest areas.
     wrong = [f for f in harvest
-             if not str(f["properties"].get("harp_tier", "")).startswith("P1a")]
+             if str(f["properties"].get("harp_tier", ""))
+             not in ("P1a", "P1d")]
     if wrong:
         kinds = Counter("{} / {}".format(f["properties"].get("harp_tier"),
                                          f["properties"].get("harp_geometry_kind"))
@@ -274,8 +285,9 @@ def _split(features: list[dict], max_block_ha: float,
             len(wrong)))
         for k, n in kinds.most_common(5):
             log("    {:>6}  {}".format(n, k))
-        log("  Only a block resolved from a mark on the delivery belongs "
-            "there. Anything else should be searched, not declared.")
+        log("  Only a block resolved from a mark on the delivery, or one the "
+            "producer declared, belongs there. Anything else should be "
+            "searched, not declared.")
     return harvest, tenure, search, sizes
 
 
@@ -509,6 +521,12 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
     lot_list = _first(sorted_items, "lot_list")
     if lot_list:
         say("  a lot list is here too - `harp lot` will use it")
+    declared_files = [getattr(i, "path", "")
+                      for i in (sorted_items.get("producer_geodata") or [])
+                      if getattr(i, "path", "")]
+    if declared_files:
+        say("  {} file(s) of producer-declared harvest areas".format(
+            len(declared_files)))
 
     marks_dir = private_marks_dir or (
         folder if sorted_items.get("private_marks") else "")
@@ -650,13 +668,57 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         say("no --register given, so no search areas were built")
         say("(a supplier register says which suppliers still need one)")
 
+    # ---- 3b: harvest areas the producer declared -------------------------
+    #
+    # Read with the rest of the drop rather than after the split, so they
+    # flow through the split like everything else and are counted by it.
+    # They are finished geometry - the producer is asserting they harvested
+    # here, and that assertion is the evidence - so they need no search area
+    # and no detection.
+    declared = []
+    if declared_files:
+        stage_cb("declared", "running")
+        say("\n" + "=" * 66)
+        say("3b  DECLARED HARVEST AREAS")
+        say("=" * 66)
+        try:
+            declared, dec_report = producer_geodata.read(
+                declared_files, month=month, log=say)
+        except Exception as exc:
+            stage_cb("declared", "failed", str(exc)[:22])
+            say("could not read them: {}".format(exc))
+            declared, dec_report = [], {}
+        if declared:
+            written.append(_write(
+                "{}/declared-areas-{}.geojson".format(cfg.paths.outbox, stamp),
+                "harp_declared", declared,
+                {"month": month, "files": dec_report.get("files", 0),
+                 "note": ("harvest areas the producer declared. Taken at "
+                          "their word; nothing checked against a register.")}))
+            stage_cb("declared", "done", "{:,} at P1d".format(len(declared)))
+            say("")
+            say("{:,} will join the harvest areas at P1d".format(len(declared)))
+            if not month:
+                say("No month given, so every declared area was kept. Give a "
+                    "month to keep only those with production in it.")
+        else:
+            # Files were present but nothing survived the month filter. Not a
+            # failure - just nothing of theirs ran in this month.
+            stage_cb("declared", "empty", "none in this month")
+    else:
+        # None in the drop. Greyed rather than left dark, so a month where the
+        # producer sent nothing looks different from one where the stage never
+        # ran.
+        stage_cb("declared", "skipped", "none in the drop")
+
     # ---- 4. split --------------------------------------------------------
     stage_cb("search", "done", "{:,}".format(len(catchment_feats)))
     stage_cb("split", "running")
     say("\n" + "=" * 66)
     say("4  SPLITTING")
     say("=" * 66)
-    everything = list(collection["features"]) + list(catchment_feats)
+    everything = (list(collection["features"]) + list(catchment_feats)
+                  + list(declared))
     harvest, tenure, search, sizes = _split(everything, max_block_ha, log=say)
 
     say("\nsize of everything classed as a block or parcel:")

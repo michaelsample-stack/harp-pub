@@ -15,6 +15,57 @@ Version increments whenever a decision is added or reversed.
 
 ---
 
+## 2 September 2026 — Producer-declared harvest areas are taken at their word
+
+**Michael.** A supplier exports their own harvest areas. They go in as **P1d**,
+traceability **declared**, with nothing checked against a register.
+
+**Why not checked.** It was tried across 211 files. Of 63 distinct timber
+marks, 21 resolved in the BC tenure register and 6% of features produced a good
+geometric match - because the two largest suppliers work private fee-simple
+land on Vancouver Island, the old E&N Railway grant, which is outside Crown
+tenure by definition. Their marks were never going to be there.
+
+Where a mark does resolve the match is exact: 38.01 ha against 38.01 ha,
+centroids 1.3 m apart. So the register is kept for one purpose only - finding a
+better producer name than a placeholder.
+
+**A fourth traceability value.** Not direct, indirect or inferred. The producer
+gave us this boundary and stands behind it, and somebody being accountable is
+different from all three.
+
+**Recorded, not rejected.** Points with no boundary, slivers, reversed harvest
+dates and placeholder dates are annotated on the feature rather than dropped. A
+feature quietly discarded is one nobody can ask about later.
+
+**One that is fixed rather than recorded:** longitude given in 0-360. 119 of
+1,450 records place Vancouver Island at 235.5 instead of -124.5. Normalised
+before anything touches the geometry, because everything downstream produces
+confident nonsense otherwise.
+
+---
+
+## 2 September 2026 — WWW is a log broker
+
+**Angela, answering the question directly.** WWW is WWW Timber Products Ltd.
+They buy volume under several timber marks and sell some of the logs to the
+client. Coastland Wood Industries does the same.
+
+So the code names a real company - just not one that cuts anything. Sixteen
+marks and six unrelated holders is what a broker's purchases look like, not a
+data fault.
+
+**It confirms the rule already in place.** `ProducerName` stays as the register
+gives it - Cape Mudge, Tsawak-qin and the rest - because they are who cut the
+wood, which is what the regulation asks. The broker is the counterparty and
+belongs on `harp_supplier`.
+
+That is the caution written into the design document a week earlier: a tenure
+holder is who held the tenure, not necessarily who the client paid. Here they
+are demonstrably different.
+
+---
+
 ## 1 September 2026 — The producer name comes from the register
 
 **Michael, after a supplier code reached a customer.**

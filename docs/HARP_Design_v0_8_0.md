@@ -412,6 +412,74 @@ that looks complete is worse than none.
 
 ---
 
+## 3G. Producer-declared harvest areas
+
+A supplier exports their own harvest areas as GeoJSON. They are taken at their
+word: the producer asserts they harvested here, and that assertion is the
+evidence. **P1d, traceability `declared`.**
+
+### Why not checked against a register
+
+It was tried. Of 63 distinct timber marks in one batch, 21 resolved in the BC
+tenure register and 6% of features produced a good geometric match.
+
+**Not a data quality failure.** The two largest suppliers work private
+fee-simple land on Vancouver Island - the old E&N Railway grant - which sits
+outside Crown tenure by definition. Their marks were never going to be there.
+
+Where a mark does resolve the match is exact: 38.01 ha against 38.01 ha,
+centroids 1.3 m apart. So the register is used for one thing only - finding a
+better producer name than a placeholder.
+
+### The producer name
+
+Three rungs, and `harp_producer_source` records which answered.
+
+| | |
+|---|---|
+| the supplier's own name | `producer declaration` |
+| where that is a placeholder, the timber mark's holder | `forest register, via the declared timber mark` |
+| failing both, whoever declared the file | `originator - the declaring party, not the harvester` |
+
+`"PURCHASE Name"` is a literal placeholder a supplier exports where they will
+not identify their upstream. It is never shipped. What ships is the declaring
+party's name, with the field beside it saying that is who declared it rather
+than who cut it.
+
+### What the reader fixes, and what it only records
+
+**Longitude in 0-360.** Some records give Vancouver Island as 235.5 rather
+than -124.5 - the same place counted eastward. Normalised before anything
+touches the geometry, because everything downstream produces confident nonsense
+otherwise. 119 of 1,450 in one batch, almost all in the placeholder-identity
+population.
+
+**Duplication.** 1,450 features, 370 distinct. A block feeding several booms is
+exported once per boom. Deduplicated on source id and geometry, or area is
+overcounted four times over.
+
+**Self-intersections.** Repaired with `buffer(0)`. Three in one batch.
+
+**Recorded but not fixed**, on `harp_data_note`: points with no boundary,
+slivers under a twentieth of a hectare, harvest dates running backwards, and
+placeholder dates. Kept and annotated rather than dropped - a feature quietly
+discarded is one nobody can ask about later.
+
+### Which month a feature belongs to
+
+Its **production** dates, not its harvest dates.
+
+Harvest dates are 65% populated and one reads `2001-12-31`. Production dates
+are complete across every line item. They record when the wood ran at the mill
+rather than when it was cut - a different thing, but the right one for
+assembling a month, because a month of harvest areas is a month of what was
+used.
+
+A block consumed over three months belongs to all three. Not duplication: the
+same ground feeding three months of production.
+
+---
+
 ## 3F. Library interfaces
 
 Confirmed against the real packages, not inferred.
@@ -487,6 +555,7 @@ Both travel on every feature.
 | **P1a** | the harvest block itself, from a public forest register | not needed |
 | **P1b** | the titled parcel a mark was scaled from — a place to look | — |
 | **P1c** | a harvest detected within one, carrying that mark | yes |
+| **P1d** | a harvest area the producer declared, in their own file | not needed |
 | **P2a** | a registered harvest area attributable to a supplier | — |
 | **P2b** | a harvest detected within one, carrying its mark and holder | yes |
 | **P3a** | a search area — district, county, national forest | — |
@@ -515,6 +584,7 @@ pipeline failure.
 | | |
 |---|---|
 | **direct** | tied to the fibre by an identifier on the delivery itself — P1a, P1b, P1c |
+| **declared** | the producer gave us this boundary and stands behind it — P1d |
 | **indirect** | attributable to the supplier, but reached through the company rather than the delivery — P2a, P2b |
 | **inferred** | an area, or a detection within one. Nothing links this ground to this supplier except overlap — P3a, P3b |
 
@@ -1326,3 +1396,34 @@ resolved - it is a route rather than a company.
 ---
 
 *Contains information licensed under the Open Government Licence — British Columbia.*
+
+---
+
+## Appendix B — the TraceMark target schema
+
+Monthly output eventually goes into TraceMark as `sce_base` rows rather than
+GeoJSON. Recorded here so the adapter can be written without rediscovering the
+shape.
+
+| Field | Type | Mode | |
+|---|---|---|---|
+| `sce_id` | STRING | REQUIRED | unique identifier for the supply chain entity |
+| `sce_type` | STRING | REQUIRED | typically `Twinrise` for a cut block |
+| `sce_source` | STRING | REQUIRED | source system identifier |
+| `commodity` | STRING | REQUIRED | typically `Wood` |
+| `name` | STRING | REQUIRED | display name for the entity |
+| `geom` | GEOGRAPHY | NULLABLE | the cut block geometry |
+| `display_geom` | GEOGRAPHY | NULLABLE | geometry for visualisation |
+
+**Two things to note when the time comes.**
+
+`display_geom` is a second geometry, separate from the declared one. HARP has
+no equivalent concept, and a search area is arguably the display geometry for
+a detection found inside it.
+
+The batch key on the Domtar deployment is `TMSourceID - SiteID - SiloID -
+DateIn (month)`. Ours is supplier plus month. Theirs carries a silo, which is
+not useful here because this client segregates by species on delivery - but
+the field exists if that changes.
+
+Not built. See the roadmap.

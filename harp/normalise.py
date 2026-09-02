@@ -52,6 +52,9 @@ TIER_TO_SUB_TYPE = {
     # Detected geometry. The polygon is ours; the mark that led to it came off
     # the client's own delivery record, which is what keeps it at P1.
     Tier.P1C: "catchment_polygon",
+    # A real boundary from a real system, just not ours. It is a database
+    # polygon in the producer's database.
+    Tier.P1D: "database_polygon",
     Tier.P2B: "catchment_polygon",
     Tier.P3B: "catchment_polygon",
     # Searched, not declared.

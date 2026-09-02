@@ -39,6 +39,7 @@ class Tier(str, Enum):
     P1A = "P1a"  # harvest block, from a public forest register
     P1B = "P1b"  # titled parcel the mark was scaled from - a search area
     P1C = "P1c"  # a harvest detected within one, carrying that mark
+    P1D = "P1d"  # a harvest area the producer declared, in their own file
     P2A = "P2a"  # registered harvest area attributable to a supplier, undated
     P2B = "P2b"  # the same, confirmed within the associated timeline
     P3A = "P3a"  # a search area - district, county, national forest
@@ -51,6 +52,7 @@ class Tier(str, Enum):
             "P1a": "harvest block, public forest register",
             "P1b": "titled parcel the mark was scaled from",
             "P1c": "detected within a titled parcel, carrying its mark",
+            "P1d": "declared by the producer",
             "P2a": "registered harvest area attributable to a supplier",
             "P2b": "the same, confirmed within the timeline",
             "P3a": "search area",
@@ -105,6 +107,9 @@ class Tier(str, Enum):
 
             direct     tied to the fibre by an identifier on the delivery
                        itself - a timber mark, and the ground it names
+            declared   the producer gave us this boundary and stands behind
+                       it. No register confirms it, and for private fee-simple
+                       land none ever will
             indirect   a registered harvest area attributable to the supplier,
                        but reached through the company rather than through the
                        delivery
@@ -112,6 +117,11 @@ class Tier(str, Enum):
                        ground to this supplier except overlap
             none       no geometry
         """
+        if self is Tier.P1D:
+            # The producer said so, and that assertion is the evidence. Not
+            # direct - no register confirms it - but not an inference either.
+            # Somebody is accountable for it, which none of the others can say.
+            return "declared"
         if self in (Tier.P1A, Tier.P1B, Tier.P1C):
             return "direct"
         if self in (Tier.P2A, Tier.P2B):

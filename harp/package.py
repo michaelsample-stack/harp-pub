@@ -69,9 +69,13 @@ SIGNATURES = [
 
 # A JSON document has no columns, so it is recognised by its top-level keys.
 DOCUMENT_SIGNATURES = [
-    ("dmp", {"DigitalMaterialPassport"},
-     "a Digital Material Passport - the client's own filed declaration. Carries "
-     "a HarvestUnitsDownloadURL pointing at the geometry behind it."),
+    ("producer_geodata", {"Originator", "Products"},
+     "harvest areas a producer declared in their own file - geometry, source "
+     "id, timber marks, volumes and production dates. Taken at their word."),
+    # No signature for a Digital Material Passport. They were a prior
+    # third-party effort and nothing in the pipeline reads them, so one turning
+    # up in a drop should be noticed rather than quietly filed under a kind
+    # nobody consumes.
     ("harvest_units", {"__geometrycollection__"},
      "harvest units downloaded from a DMP. Collections and multiparts have to "
      "be exploded, and the polygons sorted into cutblocks and regional areas."),

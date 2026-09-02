@@ -185,7 +185,11 @@ def project_feature(feature: dict) -> tuple[dict, list]:
     else:
         missing.append("ProducerName")
 
-    country = country_of(props.get("harp_jurisdiction"))
+    # A producer's own file states the country. Believe it over anything we
+    # would derive - they know where they cut.
+    stated = str(props.get("ProducerCountry") or "").strip().upper()
+    country = stated if len(stated) == 2 else country_of(
+        props.get("harp_jurisdiction"))
     if country:
         out["ProducerCountry"] = country
     else:

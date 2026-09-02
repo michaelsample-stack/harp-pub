@@ -48,8 +48,9 @@ WARN = "#B06000"
 BAD = "#A50E0E"
 SETTINGS = os.path.join(os.path.expanduser("~"), ".harp_gui.json")
 
-TIER_COLOUR = {"P1a": GOOD, "P1b": WARN, "P1c": GOOD, "P2a": WARN,
-               "P2b": GOOD, "P3a": WARN, "P3b": WARN, "P4": BAD}
+TIER_COLOUR = {"P1a": GOOD, "P1b": WARN, "P1c": GOOD, "P1d": GOOD,
+               "P2a": WARN, "P2b": GOOD, "P3a": WARN, "P3b": WARN,
+               "P4": BAD}
 
 # The stages, in order. Two are placeholders: validation and cleaning happen
 # in the Library tab rather than here, and showing them greyed is more honest
@@ -58,6 +59,7 @@ STAGES = [
     ("sort",     "Sort",         "files read by their columns"),
     ("resolve",  "Resolve",      "every source down the ladder"),
     ("search",   "Search areas", "for whatever did not resolve"),
+    ("declared", "Declared",     "producer's own areas"),
     ("split",    "Split",        "harvest, tenure, search"),
     ("union",    "Union",        "one polygon to submit"),
     ("detect",   "Detect",       "submit and wait"),
@@ -129,12 +131,14 @@ class App(tk.Tk):
         self.nb.pack(fill="both", expand=True, padx=10, pady=4)
         tabs = {}
         for key, label in (("month", "  The month  "),
+                           ("drop", "  The drop  "),
                            ("library", "  Library  "),
                            ("lots", "  Lots  "),
                            ("setup", "  Setup  ")):
             tabs[key] = ttk.Frame(self.nb)
             self.nb.add(tabs[key], text=label)
         self._build_month(tabs["month"])
+        self._build_drop(tabs["drop"])
         self._build_library(tabs["library"])
         self._build_lots(tabs["lots"])
         self._build_setup(tabs["setup"])
@@ -265,6 +269,62 @@ class App(tk.Tk):
         self.files.config(yscrollcommand=sb.set)
         self.files.pack(side="left", fill="both", expand=True)
         sb.pack(side="left", fill="y")
+
+    # ──────────────────────────────────────────────────────── the drop
+
+    def _build_drop(self, parent):
+        """What is in the client's folder, and what is missing from it.
+
+        Files are recognised by their column signature, so this is the first
+        place a changed export or a missing file shows up - before a run
+        starts rather than after it fails.
+        """
+        pad = dict(padx=12, pady=6)
+        ttk.Label(parent, text="Files are recognised by the columns they "
+                               "carry, never by their names. Anything not "
+                               "recognised is listed as an issue \u2014 it may "
+                               "be something new, or something that should "
+                               "not be here.",
+                  foreground=MUTED, wraplength=1160,
+                  justify="left").pack(anchor="w", padx=16, pady=(10, 2))
+
+        r = ttk.Frame(parent)
+        r.pack(fill="x", **pad)
+        ttk.Label(r, text="Folder", width=8).pack(side="left")
+        ttk.Entry(r, textvariable=self.drop_dir).pack(side="left", fill="x",
+                                                      expand=True, padx=6)
+        ttk.Button(r, text="\u2026", width=3,
+                   command=self.pick_drop).pack(side="left")
+        ttk.Button(r, text="Re-read",
+                   command=lambda: self.read_drop(
+                       self.drop_dir.get().strip())).pack(side="left", padx=6)
+        ttk.Button(r, text="Open",
+                   command=lambda: self.open_dir(
+                       self.drop_dir.get().strip())).pack(side="left")
+
+        g = ttk.LabelFrame(parent, text="What is in it")
+        g.pack(fill="both", expand=True, **pad)
+        df = ttk.Frame(g)
+        df.pack(fill="both", expand=True, padx=10, pady=10)
+        cols = ("kind", "file", "rows", "note")
+        self.drop_tree = ttk.Treeview(df, columns=cols, show="headings",
+                                      height=18)
+        for c, h, w in zip(cols, ("What it is", "File", "Rows",
+                                  "Why it was read that way"),
+                           (160, 380, 70, 620)):
+            self.drop_tree.heading(c, text=h)
+            self.drop_tree.column(c, width=w,
+                                  anchor="e" if c == "rows" else "w")
+        sb = ttk.Scrollbar(df, command=self.drop_tree.yview)
+        self.drop_tree.config(yscrollcommand=sb.set)
+        self.drop_tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="left", fill="y")
+        self.drop_tree.tag_configure("unknown", foreground=WARN)
+        self.drop_tree.tag_configure("missing", foreground=BAD)
+
+        self.drop_summary = ttk.Label(g, text="", foreground=MUTED,
+                                      wraplength=1160, justify="left")
+        self.drop_summary.pack(anchor="w", padx=10, pady=(0, 8))
 
     # ───────────────────────────────────────────────────────── library
 
@@ -577,8 +637,45 @@ class App(tk.Tk):
                 found.append(label)
                 if not var.get().strip():
                     var.set(path)
+        # The table, best-known first so a reader sees the essentials before
+        # the oddities.
+        self.drop_tree.delete(*self.drop_tree.get_children())
+        ORDER = ["job_list", "delivery_record", "private_marks",
+                 "producer_geodata", "lot_list", "supplier_register",
+                 "mill_locations", "supplier_geodata", "unknown"]
+        LABEL = {
+            "job_list": "supply list",
+            "delivery_record": "deliveries",
+            "private_marks": "timber marks",
+            "producer_geodata": "declared areas",
+            "lot_list": "lot list",
+            "supplier_register": "supplier register",
+            "mill_locations": "mill locations",
+            "supplier_geodata": "supplier geometry",
+            "unknown": "not recognised",
+        }
+        for kind in ORDER + [k for k in sorted(items) if k not in ORDER]:
+            for it in items.get(kind) or []:
+                note = (getattr(it, "note", "") or "")
+                if kind == "unknown":
+                    # Not an error. A file nothing matched is a finding, and
+                    # sometimes it is the client sending something new.
+                    note = "no signature matched — a finding, not an error"
+                self.drop_tree.insert(
+                    "", "end", tags=(kind,) if kind == "unknown" else (),
+                    values=(LABEL.get(kind, kind),
+                            os.path.basename(getattr(it, "path", "")),
+                            "{:,}".format(getattr(it, "rows", 0) or 0)
+                            if getattr(it, "rows", 0) else "",
+                            note[:120]))
+
         missing = [k for k in ("job_list", "delivery_record")
                    if not items.get(k)]
+        for k in missing:
+            self.drop_tree.insert("", "end", tags=("missing",), values=(
+                LABEL.get(k, k), "— not in this drop —", "",
+                "a run needs this" if k == "job_list"
+                else "the lot walkback needs this"))
         self.log("")
         self.log("{}: {} file(s)".format(os.path.basename(folder),
                                          sum(len(v) for v in items.values())))
@@ -595,10 +692,27 @@ class App(tk.Tk):
         if unknown:
             self.log("  {} file(s) matched no signature - a finding, not an "
                      "error".format(len(unknown)))
+        issues = len(items.get("unknown") or []) + len(missing)
         self.drop_note.config(
-            text=("found " + ", ".join(found)) if found else
-                 "nothing recognised in that folder",
-            foreground=MUTED if found else WARN)
+            text=("found " + ", ".join(found)
+                  + ("   \u00b7   {} issue(s), see The drop".format(issues)
+                     if issues else ""))
+            if found else "nothing recognised in that folder",
+            foreground=WARN if issues else MUTED)
+        bits = []
+        if found:
+            bits.append("{} recognised".format(len(found)))
+        if items.get("unknown"):
+            bits.append("{} file(s) nothing matched".format(
+                len(items["unknown"])))
+        if missing:
+            bits.append("{} essential file(s) absent".format(len(missing)))
+        self.drop_summary.config(
+            text="  \u00b7  ".join(bits) + (
+                ".  An unrecognised file is worth looking at: it may be a "
+                "changed export, or something that does not belong in the "
+                "drop." if items.get("unknown") else ""),
+            foreground=WARN if issues else MUTED)
 
     def pick_register(self):
         self._ask(self.register_file, "Supplier register",
