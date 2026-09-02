@@ -1,3 +1,5 @@
+<img src="data/img/HarpLogo.png" alt="HARP" width="360">
+
 # HARP — Harvest Area Resolution Pipeline
 
 HARP aggregates likely harvest areas associated with timber log and wood chip purchases by Harmac Pacific.
