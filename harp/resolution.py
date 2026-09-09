@@ -244,6 +244,10 @@ class Resolution:
     land_type: str = ""            # resolved, never declared - see below
     tenure_holder: str = ""
     client_number: str = ""
+    # Set where a register answered but the geometry fetch did not. The tier
+    # and the attributes stand; only the shape is missing, and the source is
+    # worth re-running rather than treating as unresolved.
+    geometry_error: str = ""
     client_location: str = ""
     district_code: str = ""
     district_name: str = ""
@@ -361,6 +365,7 @@ class Resolution:
             "land_type": self.land_type,
             "tenure_holder": self.tenure_holder,
             "client_number": self.client_number,
+            "geometry_error": self.geometry_error,
             "client_location": self.client_location,
             "district_code": self.district_code,
             "district_name": self.district_name,

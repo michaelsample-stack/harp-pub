@@ -50,11 +50,14 @@ import os
 from collections import Counter
 from datetime import datetime
 
-from . import (assemble, catchments, detect as detect_stage, detection_api,
+from . import reference
+from . import (assemble, catchments, dates as dates_stage,
+               detect as detect_stage, detection_api, gaps as gaps_stage,
+               species as species_stage,
                eudr_schema, identify, io, library as library_stage, manifest,
                mills, package, router)
 from .resolution import Tier
-from .sources import private_marks, producer_geodata
+from .sources import ften as ften_source, private_marks, producer_geodata
 
 
 # A polygon larger than this is not behaving like a cut block. BC coastal
@@ -71,6 +74,10 @@ SCHEMA = [
     # nothing did. ProducerCountry is here because a producer's own file
     # states it and there is no reason to rediscover it from the jurisdiction.
     "ProducerName", "ProducerCountry",
+    # Asked for by the client on behalf of their downstream customers. Derived
+    # for most features - harp_harvest_basis says how, on every one.
+    "HarvestStartDate", "HarvestEndDate", "harp_harvest_basis",
+    "harp_detected_first",
     "harp_producer_number", "harp_producer_source",
     "harp_supplier", "harp_supplier_code", "harp_jurisdiction",
     "harp_geometry_kind", "harp_method", "harp_source_system",
@@ -82,6 +89,15 @@ SCHEMA = [
     # Only a producer's own file carries these. Empty elsewhere, and that is
     # the point - the shared schema means a consumer never has to ask which
     # route produced a feature.
+    "harp_declared_start", "harp_declared_end",
+    # What was growing there. Read from a national raster after the month is
+    # assembled, so every route gets it the same way.
+    "harp_species_dominant", "harp_species", "harp_species_json",
+    "harp_species_basis",
+    # Set only where a value was estimated rather than found. Carried into
+    # the delivered view so a month containing estimates can be told from one
+    # that does not, after the harp_ fields are stripped.
+    "harp_estimated",
     "harp_production_from", "harp_production_to", "harp_production_months",
     "harp_volume_m3", "harp_species", "harp_boom", "harp_source_file",
     "harp_data_note",
@@ -269,6 +285,21 @@ def _split(features: list[dict], max_block_ha: float,
     if moved:
         log("  {} polygon(s) exceeded {:,.0f} ha and became search areas, "
             "keeping their mark".format(moved, max_block_ha))
+
+    # A feature with no jurisdiction has no country either - the EUDR field
+    # derives from it, and a blank falls back to the config default. That
+    # silently declared Californian harvest as Canadian for a month.
+    blank = [f for f in (harvest + tenure + search)
+             if not str(f["properties"].get("harp_jurisdiction") or "").strip()]
+    if blank:
+        log("")
+        log("  {} feature(s) carry no jurisdiction. Their country will fall "
+            "back to the config default, which is wrong for anything outside "
+            "it.".format(len(blank)))
+        kinds = Counter(f["properties"].get("harp_geometry_kind", "?")
+                        for f in blank)
+        for k, n in kinds.most_common(4):
+            log("    {:>6}  {}".format(n, k))
 
     # The harvest file is the one thing that reaches a declaration without
     # detection, so nothing indirect belongs in it. A mismatch here means the
@@ -606,7 +637,7 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         register: str = "", mills_csv: str = "", alias_override: str = "",
         max_block_ha: float = MAX_BLOCK_HA, radius_km: float = 150.0,
         fetch_geometry: bool = True, unique: bool = True,
-        detect: bool = True, stage: bool = True,
+        detect: bool = True, stage: bool = True, validate: bool = True,
         api_base: str = "", limit: int = 0,
         log=print, on_stage=None) -> dict:
     """The whole month, from the client's drop to a staged library month.
@@ -663,8 +694,19 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         register = _first(sorted_items, "supplier_register")
         if register:
             say("  supplier register found in the drop")
+    if not register:
+        # The packaged copy. Its absence is the quietest failure in the
+        # pipeline: no register means no supplier gets a search area, so a
+        # month resolves what it can from marks and silently produces nothing
+        # for everyone else.
+        register = reference.register(cfg)
     if not mills_csv:
         mills_csv = _first(sorted_items, "mill_locations")
+    if not mills_csv:
+        # The packaged copy. Without it a run silently loses every mill
+        # location and falls back to a circle round a town name, which is a
+        # much weaker search area and gives no hint that anything is missing.
+        mills_csv = reference.mills(cfg)
         if mills_csv:
             say("  mill locations found in the drop")
     lot_list = _first(sorted_items, "lot_list")
@@ -704,6 +746,10 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
     from .cache import Cache
     from .sources import hbs
     store = Cache("{}/cache".format(cfg.paths.staging))
+    # The register goes down, and a run that has already asked about two
+    # hundred identifiers should not have to ask again. Same store as HBS,
+    # different kinds and different expiry.
+    ften_source.use_cache(store)
     client = hbs.Client(cache=store)
 
     registry = None
@@ -718,16 +764,115 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
             say(str(exc))
             registry = None
 
-    results = []
+    # Ask about every identifier at once before the ladder starts, so it
+    # reads an index rather than making 660 sequential requests. That count
+    # is what gets a run throttled, and a throttled run resolves almost
+    # nothing while looking healthy.
+    index = None
+    try:
+        say("")
+        index = ften_source.prefetch([r.identifier for r in records
+                                      if (r.jurisdiction or "").upper() == "BC"],
+                                     log=say)
+        if index is not None and len(index):
+            say("  {:,} row(s) indexed, and cached - a re-run of this month "
+                "will not ask again".format(len(index)))
+    except Exception as exc:
+        say("prefetch failed, so the ladder will query as it goes: {}".format(
+            str(exc).splitlines()[0][:120]))
+
+    results, broke = [], []
     for i, rec in enumerate(records, 1):
-        res = router.resolve(rec, hbs_client=client,
-                             fetch_geometry=fetch_geometry, registry=registry)
+        try:
+            res = router.resolve(rec, hbs_client=client,
+                                 fetch_geometry=fetch_geometry,
+                                 registry=registry, index=index)
+        except Exception as exc:
+            # One source must not end a month. A public register that times
+            # out or throws on a badly formed identifier is a fact about that
+            # source, not about the other two hundred - and losing 174
+            # resolved sources to the 175th is the worst possible trade.
+            res = router._blank(rec)
+            res.unresolved_reason = (
+                "the resolver raised on this source: {}".format(
+                    str(exc).splitlines()[0][:160]))
+            broke.append((rec.identifier, str(exc).splitlines()[0][:110]))
         results.append(res)
-        if i % 25 == 0 or i == len(records):
+        # Every ten rather than every twenty-five. A source that reaches the
+        # register can take several seconds, and a counter that moves twice a
+        # minute looks like one that has stopped.
+        if i % 10 == 0 or i == len(records):
             tiers = Counter(r.tier.value for r in results)
             say("  {:>4}/{}  {}".format(i, len(records), dict(sorted(
                 tiers.items()))))
             stage_cb("resolve", "running", "{}/{}".format(i, len(records)))
+
+    # A service that stopped answering is the one failure that produces a
+    # month which looks healthy and is not. Every rung already records its own
+    # service errors; nothing was counting them.
+    svc = [r for r in results
+           if "unreachable" in (r.unresolved_reason or "").lower()
+           or "service error" in (r.unresolved_reason or "").lower()]
+    unresolved = sum(1 for r in results if not r.resolved)
+    if svc:
+        share = len(svc) / (len(results) or 1)
+        say("")
+        if share > 0.10:
+            say("!" * 66)
+            say("{} of {} source(s) failed on a service call, not on their "
+                "data.".format(len(svc), len(results)))
+            say("")
+            say("That is {:.0f}% of the month. A register that stops "
+                "answering partway through produces a month that looks "
+                "complete and is mostly nothing - every source is handled "
+                "correctly and the total is meaningless.".format(share * 100))
+            say("")
+            say("Re-run it. The register is usually available again within "
+                "the hour, and the prefetch means a re-run costs a handful "
+                "of requests rather than hundreds.")
+            say("!" * 66)
+            outcome["service_failures"] = len(svc)
+        else:
+            say("  {} source(s) failed on a service call rather than on "
+                "their data - worth a re-run".format(len(svc)))
+
+    # And the number that would have caught this on its own: how this month
+    # compares with the one before it.
+    previous = None
+    try:
+        for row in manifest.history(cfg, limit=12):
+            # The most recent run that got as far as resolving, other than
+            # this one. A run that fell over at the drop tells us nothing.
+            if row.get("step") == "resolve" and row.get("rows_in"):
+                previous = row.get("rows_rejected")
+                break
+    except Exception:
+        previous = None
+    if previous and previous > 0:
+        jump = unresolved / previous
+        if jump > 1.5:
+            say("")
+            say("  {} unresolved this run against {} last time - {:.0f}% "
+                "more. Something answered differently, and it is worth "
+                "knowing what before this month goes anywhere."
+                .format(unresolved, previous, (jump - 1) * 100))
+
+    if broke:
+        say("")
+        say("  {} source(s) raised and were recorded as unresolved rather "
+            "than ending the run:".format(len(broke)))
+        for ident, why in broke[:8]:
+            say("    {:<20}{}".format(str(ident)[:20], why))
+        if len(broke) > 8:
+            say("    ... and {} more".format(len(broke) - 8))
+        say("  These are worth re-running - a service that failed once "
+            "usually answers next time.")
+    lost = sum(1 for r in results if getattr(r, "geometry_error", ""))
+    if lost:
+        say("")
+        say("  {} source(s) resolved but their geometry did not arrive. They "
+            "keep their tier and attributes; re-run to fill the shapes."
+            .format(lost))
 
     run_rec.rows_in = len(records)
     run_rec.rows_out = sum(1 for r in results if r.resolved)
@@ -761,6 +906,18 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
     if register:
         try:
             supplier_rows = catchments.read_sources(register)
+            wanting = sum(1 for r in supplier_rows
+                          if str(r.get("outstanding") or "0").strip()
+                          not in ("", "0", "0.0"))
+            if supplier_rows and not wanting:
+                # Reads fine and asks for nothing. Either the month is
+                # genuinely finished, or this is a report about the suppliers
+                # rather than the register - and the second has happened.
+                say("")
+                say("  the register has {} supplier(s) and none of them needs "
+                    "a search area.".format(len(supplier_rows)))
+                say("  That is either a finished month or the wrong file. No "
+                    "search areas will be built.")
         except Exception as exc:
             say("could not read the supplier register: {}".format(exc))
             supplier_rows = []
@@ -775,14 +932,14 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
             # the layer. Try the likely places and say which was used - an
             # earlier run built no operator tenure at all and gave no hint why.
             from .aliases import AliasTable
+            # The resolver knows the order: an explicit path, then config,
+            # then a local copy, then the one shipped with the package. The
+            # last of those is why this can no longer come up empty.
             candidates = [
                 alias_override,
+                reference.aliases(cfg, alias_override),
                 "{}/registry/supplier_aliases.csv".format(
                     os.path.dirname(cfg.paths.staging.rstrip("/\\")) or "data"),
-                os.path.join("data", "registry", "supplier_aliases.csv"),
-                os.path.join(os.path.dirname(os.path.dirname(
-                    os.path.abspath(__file__))), "data", "registry",
-                    "supplier_aliases.csv"),
             ]
             alias_path = next((c for c in candidates
                                if c and os.path.isfile(c)), "")
@@ -948,6 +1105,66 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         # rename: the month keeps every harp_ field, and this is derived from
         # it, so the record of how a producer name was arrived at survives.
         say("\n" + "=" * 66)
+        say("7b  HARVEST DATES")
+        say("=" * 66)
+        stage_cb("dates", "running")
+        try:
+            merged, date_report = dates_stage.apply(
+                merged, start, end, cfg,
+                out_dir=os.path.join(out_dir, "2-detection"),
+                api_base=api_base, log=say)
+            stage_cb("dates", "done", "{:,} dated".format(
+                date_report.get("dated_total", 0)))
+            outcome["dated"] = date_report.get("dated_total", 0)
+        except Exception as exc:
+            # A date is an addition to a month, not a precondition for one.
+            # Losing it should not lose the month.
+            stage_cb("dates", "failed", str(exc)[:22])
+            say("could not date them: {}".format(exc))
+
+        say("\n" + "=" * 66)
+        say("7c  SPECIES")
+        say("=" * 66)
+        stage_cb("species", "running")
+        try:
+            merged, sp_report = species_stage.apply(merged, cfg, log=say)
+            if not sp_report.get("enabled"):
+                stage_cb("species", "skipped", "off in config")
+            elif sp_report.get("why"):
+                stage_cb("species", "empty", sp_report["why"][:22])
+            else:
+                stage_cb("species", "done", "{:,} named".format(
+                    sp_report.get("with_species", 0)))
+                outcome["with_species"] = sp_report.get("with_species", 0)
+        except Exception as exc:
+            # Species is an addition to a month, not a precondition for one.
+            stage_cb("species", "failed", str(exc)[:22])
+            say("could not read species: {}".format(exc))
+
+        say("\n" + "=" * 66)
+        say("7d  FILLING THE GAPS")
+        say("=" * 66)
+        stage_cb("gaps", "running")
+        try:
+            merged, gap_report = gaps_stage.apply(merged, cfg, log=say)
+            if not gap_report.get("enabled"):
+                stage_cb("gaps", "skipped", "off in config")
+            elif gap_report.get("over_threshold"):
+                # Amber rather than green. The stage did its job, but the
+                # amount of it is the finding.
+                stage_cb("gaps", "empty", "{:.0f}% estimated".format(
+                    gap_report.get("share", 0) * 100))
+                outcome["estimated"] = gap_report.get("estimated", 0)
+                outcome["estimates_over_threshold"] = True
+            else:
+                stage_cb("gaps", "done", "{:,} estimated".format(
+                    gap_report.get("estimated", 0)))
+                outcome["estimated"] = gap_report.get("estimated", 0)
+        except Exception as exc:
+            stage_cb("gaps", "failed", str(exc)[:22])
+            say("could not fill the gaps: {}".format(exc))
+
+        say("\n" + "=" * 66)
         say("8  EUDR FIELDS")
         say("=" * 66)
         _month_census(merged, say)
@@ -975,7 +1192,7 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
                 opts["path"], month, merged,
                 _delivery_file(sorted_items), opts,
                 source_files=[os.path.basename(w) for w in written[-2:]],
-                run_id=stamp.split("-")[-1], log=say)
+                run_id=stamp.split("-")[-1], validate=validate, log=say)
             outcome["library_state"] = built["state"]
             stage_cb("validate", "done" if built["state"] == "pending"
                      else "empty",
@@ -1026,6 +1243,11 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
                     outcome["detections"]))
             if merged:
                 fh.write("{:>8,}  in the month\n".format(len(merged)))
+            if outcome.get("estimated"):
+                fh.write("{:>8,}  of those were estimated{}\n".format(
+                    outcome["estimated"],
+                    "  <-- over the threshold, look at this"
+                    if outcome.get("estimates_over_threshold") else ""))
             state = outcome.get("library_state")
             if state:
                 fh.write("\nthe month is {}\n".format(state))

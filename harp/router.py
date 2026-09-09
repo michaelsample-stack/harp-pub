@@ -222,7 +222,28 @@ def _hit(res: Resolution, rung: str, field: str, where: str,
     res.district_name = (first.get("GEOGRAPHIC_DISTRICT_NAME") or "").strip()
     res.land_type = res.land_type or "public"
     if fetch_geometry:
-        res.features = _ften.features(where, log=log or (lambda *_: None))
+        try:
+            res.features = _ften.features(where,
+                                          log=log or (lambda *_: None))
+        except Exception as exc:
+            # A transient service failure here used to end the whole run.
+            # Every rung above already treats a service error as a rung that
+            # did not answer; the geometry fetch was the one unguarded call,
+            # and it killed a month at source 175 of 221 - losing the 174
+            # that had already resolved.
+            #
+            # The source keeps its tier and its attributes: the register did
+            # answer, and only the shape is missing. It is recorded as a
+            # source needing a re-run rather than as one that failed to
+            # resolve.
+            res.features = [{"type": "Feature", "geometry": None,
+                             "properties": r} for r in rows]
+            res.geometry_error = str(exc).splitlines()[0][:200]
+            res.note("the register answered but its geometry did not: {}. "
+                     "Re-run this source.".format(res.geometry_error))
+            if log:
+                log("    geometry fetch failed: {}".format(
+                    res.geometry_error))
     else:
         res.features = [{"type": "Feature", "geometry": None,
                          "properties": r} for r in rows]
@@ -230,7 +251,7 @@ def _hit(res: Resolution, rung: str, field: str, where: str,
 
 def resolve_bc(record: Record, hbs_client=None, fetch_geometry: bool = True,
                rule=None, log=None, catchment: bool = False,
-               registry=None) -> Resolution:
+               registry=None, index=None) -> Resolution:
     """Run one BC identifier down the ladder.
 
     `catchment` turns on R8. It is off by default because building a catchment
@@ -267,7 +288,7 @@ def resolve_bc(record: Record, hbs_client=None, fetch_geometry: bool = True,
     for rung, fld in (("R1", "TIMBER_MARK"),
                       ("R2", "HARVEST_AUTH_FOREST_FILE_ID"),
                       ("R3", "CUT_BLOCK_FOREST_FILE_ID")):
-        rows, where, err = _ften.by_field(fld, uid)
+        rows, where, err = _ften.by_field(fld, uid, index)
         if rows:
             _hit(res, rung, fld, where, window(rows), Tier.P1A,
                  fetch_geometry, log)
@@ -354,7 +375,7 @@ def resolve_bc(record: Record, hbs_client=None, fetch_geometry: bool = True,
             licence = ""
         if licence and licence != uid:
             for fld in ("HARVEST_AUTH_FOREST_FILE_ID", "TIMBER_MARK"):
-                rows, where, err = _ften.by_field(fld, licence)
+                rows, where, err = _ften.by_field(fld, licence, index)
                 if err:
                     res.log("R6", "FTEN cutblock 340", where, False,
                             "SERVICE ERROR: " + err)
@@ -530,12 +551,12 @@ STUBS = {
 
 def resolve(record: Record, hbs_client=None, fetch_geometry: bool = True,
             rule=None, log=None, catchment: bool = False,
-            registry=None) -> Resolution:
+            registry=None, index=None) -> Resolution:
     """Route one record to its jurisdiction's resolver."""
     jur = (record.jurisdiction or "").upper()
     if jur == "BC":
         return resolve_bc(record, hbs_client, fetch_geometry, rule, log,
-                          catchment, registry)
+                          catchment, registry, index)
     if jur in STUBS:
         return resolve_stub(record, STUBS[jur])
     return resolve_stub(record, "Unknown jurisdiction. Known: BC, "

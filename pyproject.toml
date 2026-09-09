@@ -1,6 +1,6 @@
 [project]
 name = "harp"
-version = "0.22.1"
+version = "0.27.2"
 description = "Harvest Area Resolution Pipeline - resolves harvest geometry for EUDR due diligence"
 requires-python = ">=3.10"
 dependencies = [
@@ -50,7 +50,10 @@ build-backend = "setuptools.build_meta"
 include = ["harp*"]
 
 [tool.setuptools.package-data]
-harp = ["configs/*.yaml"]
+# The reference data ships with the package so a clone works and pip install
+# carries it. Without this a run finds no mill locations and falls back to a
+# circle round a town name, giving no hint that anything is missing.
+harp = ["configs/*.yaml", "reference/*.csv", "reference/*.md"]
 
 [tool.ruff]
 line-length = 100

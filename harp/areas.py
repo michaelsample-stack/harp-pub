@@ -54,12 +54,18 @@ BASIS = {
 
 
 def path_for(cfg) -> str:
+    """Where stated areas live.
+
+    `sources.areas.path` still wins for anybody who set it. Otherwise this
+    goes through the reference resolver, which prefers a local copy and falls
+    back to the one shipped with the package.
+    """
     base = ((getattr(cfg, "sources", None) or {}).get("areas") or {}).get(
         "path")
     if base:
         return os.path.abspath(os.path.expanduser(os.path.expandvars(base)))
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(root, "data", "registry", "supplier_areas.csv")
+    from . import reference
+    return reference.areas(cfg)
 
 
 def load(path: str) -> dict:

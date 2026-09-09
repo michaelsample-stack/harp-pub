@@ -24,6 +24,8 @@ from datetime import date, datetime, timedelta
 from . import (adapters, assemble, cache, config, detect, detection_api,
                areas as areas_stage,
                eudr_schema,
+               gaps as gaps_stage,
+               species as species_stage,
                library as library_stage,
                lots as lots_stage,
                drop, identify, io,
@@ -384,6 +386,133 @@ def cmd_enrich(cfg, args) -> int:
     for k, n in kinds.most_common():
         _log(f"  {n:>7,}  {k}")
     _log(f"\n  {path}")
+    return 0
+
+
+def _month_file(cfg, args) -> str:
+    """The month to work on - the approved copy first."""
+    if args.source:
+        return args.source
+    if args.month:
+        opts = library_stage.settings(cfg)
+        shelved = os.path.join(opts["path"], args.month,
+                               "harvest-{}.geojson".format(args.month))
+        if os.path.isfile(shelved):
+            return shelved
+        hits = sorted(glob.glob(
+            "{}/{}_run-*/3-month/harvest-{}.geojson".format(
+                cfg.paths.outbox, args.month, args.month)))
+        if hits:
+            return hits[-1]
+    hits = sorted(glob.glob("{}/*/3-month/harvest-*.geojson".format(
+        cfg.paths.outbox)))
+    return hits[-1] if hits else ""
+
+
+def cmd_gaps(cfg, args) -> int:
+    """Estimate what the services could not answer, on an existing month.
+
+    A run does this itself where config allows. This is for a month built
+    before it existed, or one where the gaps were left and now need filling
+    for a deliverable.
+    """
+    src = _month_file(cfg, args)
+    if not src or not os.path.isfile(src):
+        _log("nothing to read. Give --month or --source.")
+        return 1
+    _log(f"from {src}")
+    with open(src, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    feats = doc.get("features") or []
+    if not feats:
+        _log("no features in that file")
+        return 1
+
+    # The command is the asking, so config is not consulted for whether to
+    # run - only for how.
+    class _Cfg:
+        sources = dict(getattr(cfg, "sources", None) or {})
+    forced = _Cfg()
+    forced.sources["gaps"] = {**(forced.sources.get("gaps") or {}),
+                              "enabled": True,
+                              **({"neighbours": args.neighbours}
+                                 if args.neighbours else {}),
+                              **({"max_km": args.km} if args.km else {})}
+
+    feats, report = gaps_stage.apply(feats, forced, log=_log)
+    if not report.get("estimated"):
+        _log("nothing was filled")
+        return 0
+
+    out = src if args.in_place else os.path.join(
+        os.path.dirname(src),
+        "{}-filled.geojson".format(
+            os.path.splitext(os.path.basename(src))[0]))
+    doc["features"] = feats
+    doc.setdefault("metadata", {}).update({
+        "gaps_filled": datetime.now().isoformat(timespec="seconds"),
+        "gaps_filled_count": report["estimated"]})
+    io.write_json(out, doc)
+    _log("")
+    _log(f"  {out}")
+    return 0
+
+
+def cmd_species(cfg, args) -> int:
+    """Species on an existing month, without re-running everything else.
+
+    A run does this itself. This is for adding species to a month that was
+    built before it existed, or for re-reading one after the class tables
+    change.
+    """
+    src = args.source
+    if not src and args.month:
+        # The approved copy first - a month somebody signed off is the one
+        # worth enriching.
+        opts = library_stage.settings(cfg)
+        shelved = os.path.join(opts["path"], args.month,
+                               "harvest-{}.geojson".format(args.month))
+        if os.path.isfile(shelved):
+            src = shelved
+        else:
+            hits = sorted(glob.glob(
+                "{}/{}_run-*/3-month/harvest-{}.geojson".format(
+                    cfg.paths.outbox, args.month, args.month)))
+            src = hits[-1] if hits else ""
+    if not src:
+        hits = sorted(glob.glob("{}/*/3-month/harvest-*.geojson".format(
+            cfg.paths.outbox)))
+        src = hits[-1] if hits else ""
+    if not src or not os.path.isfile(src):
+        _log("nothing to read. Give --month or --source.")
+        return 1
+
+    _log(f"from {src}")
+    with open(src, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    feats = doc.get("features") or []
+    if not feats:
+        _log("no features in that file")
+        return 1
+
+    feats, report = species_stage.apply(feats, cfg, log=_log)
+    if not report.get("enabled") or report.get("why"):
+        return 1
+
+    if args.in_place:
+        out = src
+    else:
+        base = os.path.splitext(os.path.basename(src))[0]
+        out = os.path.join(os.path.dirname(src),
+                           "{}-species.geojson".format(base))
+    doc["features"] = feats
+    doc.setdefault("metadata", {}).update({
+        "species_read": datetime.now().isoformat(timespec="seconds"),
+        "species_source": "{} / {}".format(species_stage.CA_COLLECTION,
+                                           species_stage.US_IMAGE)})
+    io.write_json(out, doc)
+    _log("")
+    _log(f"  {out}")
     return 0
 
 
@@ -872,7 +1001,7 @@ def cmd_run(cfg, args) -> int:
         cfg, args.folder,
         month=args.month or "",
         detect=not args.no_detect,
-        stage=not args.no_stage,
+        stage=not args.no_stage, validate=not args.no_validate,
         api_base=args.api or "",
         private_marks_dir=args.private_marks or "",
         register=args.register or "",
@@ -1296,6 +1425,10 @@ search areas nobody can declare.
                          "after the split, which leaves nothing declarable")
     rn.add_argument("--no-detect", action="store_true",
                     help="stop after the split on purpose")
+    rn.add_argument("--no-validate", action="store_true",
+                    help="stage the month without checking it against the "
+                         "EUDR rules. Faster, and the month is marked "
+                         "unvalidated and cannot be promoted.")
     rn.add_argument("--no-stage", action="store_true",
                     help="write the month but do not validate or stage it")
     rn.add_argument("--api", metavar="URL",
@@ -1336,6 +1469,23 @@ search areas nobody can declare.
     en.add_argument("--search", metavar="GLOB")
     en.add_argument("--harvest", metavar="GLOB")
     en.set_defaults(fn=cmd_enrich)
+
+    gp = sub.add_parser("gaps",
+                        help="estimate what the services could not answer")
+    gp.add_argument("--month", help="YYYY-MM")
+    gp.add_argument("--source", metavar="GEOJSON")
+    gp.add_argument("--neighbours", type=int)
+    gp.add_argument("--km", type=float)
+    gp.add_argument("--in-place", action="store_true")
+    gp.set_defaults(fn=cmd_gaps)
+
+    spp = sub.add_parser("species",
+                         help="what was growing on each harvest area")
+    spp.add_argument("--month", help="YYYY-MM")
+    spp.add_argument("--source", metavar="GEOJSON")
+    spp.add_argument("--in-place", action="store_true",
+                     help="overwrite the file rather than writing a copy")
+    spp.set_defaults(fn=cmd_species)
 
     dl = sub.add_parser("deliver",
                         help="the four EUDR fields and nothing else, for "

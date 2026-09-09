@@ -61,6 +61,9 @@ or:
 | `harp library` | Review staged and approved monthly datasets |
 | `harp lot <lot list>` | Resolve production lots back to contributing deliveries and harvest areas |
 | `harp areas` | Manage manually supplied operating and search areas |
+| `harp species` | Species on an existing month, without running everything else |
+| `harp gaps` | Estimate what the services could not answer |
+| `harp deliver` | The four EUDR fields and nothing else, for sending out |
 | `harp mills` | Manage supplier mill locations and districts |
 
 ### Resuming a run
@@ -191,6 +194,34 @@ resolve, and what has been flagged and carried forward anyway.
 
 This is the last point at which the shape of a month can be reviewed before the
 numbers change.
+
+### 7b. Harvest dates
+
+Every feature that can carry one gets `HarvestStartDate` and `HarvestEndDate`,
+bracketed one month either side of when a satellite observed the change. A
+producer's own dates are used where given; blocks that resolved without
+detection get a second call of their own.
+
+The dates are derived rather than observed, and `harp_harvest_basis` says so
+on every feature.
+
+### 7c. Species
+
+What was growing there, from Canada's annual leading-species raster and the US
+forest type raster, through Earth Engine. Each feature is counted by class over
+its own area; a point is read as a circle of the area it states.
+
+The two rasters answer slightly different questions and their percentages
+should not be averaged across the border. The basis field names which was read.
+
+### 7d. Gaps
+
+The services leave a few percent of a month unanswered. Those are estimated
+from the nearest features that do have a value - nearest by distance rather
+than by supplier.
+
+Every filled feature is marked `harp_estimated` and its basis says so. Above
+15% of a month the run says so loudly, because that is no longer filling gaps.
 
 ### 7. Validate and stage
 
@@ -342,6 +373,25 @@ Public data sources used by HARP include:
 
 ---
 
+## Reference data
+
+Four files ship inside the package and are used unless something else is
+given. They are ours rather than the client's, and needing to select them is
+itself a failure mode: a run without mill locations builds a circle round a
+town name for every supplier and says nothing.
+
+| | |
+|---|---|
+| `supplier_register.csv` | who has what, and who still needs a search area |
+| `supplier_aliases.csv` | supplier to tenure client number |
+| `supplier_locations.csv` | mill location and district per supplier |
+| `supplier_areas.csv` | operating areas stated by hand |
+
+A copy in `data/registry` is preferred over the packaged one, so a file being
+edited locally keeps being used. `sources.reference.path` overrides both.
+
+A run lists all four and their row counts before resolving anything.
+
 ## Installation
 
 Install HARP and its supporting local packages in editable mode:
@@ -434,11 +484,11 @@ its state so that a file moved out of context still explains itself.
 
 ## Documentation
 
-`docs/HARP_Design_v0_8_0.md`
+`docs/HARP_Design_v0_9_0.md`
 
 Detailed description of the pipeline, resolution methods, precision tiers, and processing workflow.
 
-`docs/HPA1_Decisions_Log_v1_3.md`
+`docs/HPA1_Decisions_Log_v1_4.md`
 
 Record of significant design decisions, including the date, rationale, and any later reversals.
 

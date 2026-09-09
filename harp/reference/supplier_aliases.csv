@@ -1,0 +1,101 @@
+﻿supplier,client_number,client_name,state,decided_by,decided_on,reason,jurisdiction,match_basis
+Aspen Planers Ltd,00185478,,accepted,matcher,2026-08-24,exact name match,BC,
+Aspen Planers Ltd,00001064,,accepted,matcher,2026-08-24,exact name match,BC,
+Coastland Custom Chipping,00029454,,accepted,MB,2026-08-24,same entity as Coastland Wood Ind; 42 blocks DSI/DSC/DCR active to 2026,BC,
+Delta Cedar Split Barge,00017442,,accepted,MB,2026-08-24,"exact name; note only 5 blocks, 2004-05",BC,
+G&R Cedar,00169256,,accepted,MB,2026-08-24,"exact name match, G & R Cedar (2009) Ltd",BC,
+Ledcor Silverdale Reload,00180770,,accepted,MB,2026-08-24,Ledcor Forest Products Partnership - the forestry arm,BC,
+Mercer Celgar Ltd,00012345,,accepted,MB,2026-08-24,confirmed,BC,
+SSD Sawmill Sales Direct Ltd,00184314,,accepted,matcher,2026-08-24,exact name match,BC,
+Teal Jones,00198850,,accepted,MB,2026-08-24,Teal-Jones Group owns Teal Cedar Products; coastal tenure DCK/DSI,BC,
+Teal Jones,00142691,,accepted,MB,2026-08-24,"second location code, same company",BC,
+Best Quality Cedar,00127061,BEST QUALITY CEDAR PRODUCTS LTD,proposed,,,,BC,high
+Campbell River Shake,00030657,CAMPBELL RIVER SHAKE & SHINGLE CO. LTD.,proposed,,,,BC,medium
+Campbell River Shake,00044719,JOHN CAMPBELL,proposed,,,,BC,possible - shares the name but carries a word of its own
+Campbell River Shake,00117697,RICKY CAMPBELL,proposed,,,,BC,possible - shares the name but carries a word of its own
+Campbell River Shake,00030916,SHIRLEY CAMPBELL,proposed,,,,BC,possible - shares the name but carries a word of its own
+Cape Scott,00158310,CAPE SCOTT CEDAR PRODUCTS LTD.,proposed,,,,BC,high
+Cape Scott,00166548,CAPE SCOTT WIND LP,proposed,,,,BC,possible - shares the name but carries a word of its own
+Chemainus Forest Products,00170892,CHEMAINUS FOREST PRODUCTS LTD.,proposed,,,,BC,high
+Cipa Lumber,00026759,CIPA LUMBER CO. LTD.,proposed,,,,BC,high
+Coast Mountain Cedar,00039937,ANVIL MOUNTAIN RANCH LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00183707,ARROW MOUNTAIN WOODLOT 1461 LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00129733,BABCOCK MOUNTAIN SAWMILLS LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00012560,BLUE MOUNTAIN WOODLOT LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00018235,CANADIAN MOUNTAIN HOLIDAYS INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00139428,CANOE MOUNTAIN RESORT INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00116749,CHILLIWACK MOUNTAIN LOG HOMES LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00005411,COPPER MOUNTAIN CEDAR PRODUCTS LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00093489,CRYSTAL MOUNTAIN RESORTS LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00147721,FALLS MOUNTAIN COAL INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00121047,GRIZZLY MOUNTAIN CONSTRUCTION LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00114226,HUDSON BAY MOUNTAIN RESORT INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00079321,KELLY MOUNTAIN CONTRACTING LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00028783,LITTLE MOUNTAIN CONTRACTING LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00131630,MOUNTAIN SPRINGS ENTERPRISES LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00130374,MOUNTAIN VIEW CEMETERY,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00167317,MOUNTAIN VIEW SILVICULTURE LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00052434,PHOENIX MOUNTAIN ALPINE SKI SOCIETY,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00095336,POWDER KING MOUNTAIN RESORT INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00034873,RED MOUNTAIN RESORTS INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00149699,REVELSTOKE MOUNTAIN RESORT INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00176744,SELKIRK MOUNTAIN FOREST LIMITED,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00094100,SENTINEL MOUNTAIN ENTERPRISES INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00128110,SHAS MOUNTAIN SILVICULTURE LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coast Mountain Cedar,00155793,TRANS MOUNTAIN PIPELINE ULC,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coastland Wood Ind.,00029454,COASTLAND WOOD INDUSTRIES LTD.,proposed,,,,BC,high
+Coulson Group,00001391,COULSON FOREST PRODUCTS LIMITED,proposed,,,,BC,high
+Coulson Group,00178977,COULSON MANUFACTURING 2017 LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Coulson Group,00082972,JOHN COULSON,proposed,,,,BC,possible - shares the name but carries a word of its own
+Delta Cedar,00087786,CITY OF DELTA,proposed,,,,BC,possible - shares the name but carries a word of its own
+Delta Cedar,00017442,DELTA CEDAR PRODUCTS LTD.,proposed,,,,BC,high
+Delta Cedar,00168522,DELTA CEDAR SERVICES LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Franklin Forest Products Ltd,00141358,IAN FRANKLIN,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00118249,BARKERVILLE GOLD MINES LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00029868,CONSOLIDATED VAN ANDA GOLD LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00153042,EAGLE CLAW GOLD MINING LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00144777,ELECTRA GOLD LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00043976,"GOLD LEAF MANAGEMENT, INC.",proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00114441,GOLDEN DESIGNERS CHOICE,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00019189,GOLDEN DISTRICT GOLF AND COUNTRY,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00006049,GOLDEN DISTRICT ROD AND GUN CLUB,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00143679,GOLDEN NORDIC SKI CLUB SOCIETY,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00167749,HENNING GOLD MINES INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00166083,MARY CREEK GOLD MINES INC,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00164664,NEW GOLD INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00158916,SEABRIDGE GOLD INC,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gold River Shingle Mill,00149801,STIKINE GOLD CORPORATION,proposed,,,,BC,possible - shares the name but carries a word of its own
+Gorman Group,00001690,GORMAN BROS. LUMBER LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Imperial Fibre,00034448,IMPERIAL LIMESTONE COMPANY LIMITED,proposed,,,,BC,possible - shares the name but carries a word of its own
+Imperial Fibre,00025335,IMPERIAL METALS CORPORATION,proposed,,,,BC,possible - shares the name but carries a word of its own
+Imperial Fibre,00052954,IMPERIAL OIL RESOURCES LIMITED,proposed,,,,BC,possible - shares the name but carries a word of its own
+Imperial Fibre,00128678,IMPERIAL SHAKE CO. LTD.,proposed,,,,BC,high
+Kruger Inc.,00160632,KRUGER PRODUCTS 2010 L.P.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Long Hoh Enterprises,00105419,LONG HOH ENTERPRISES CANADA LTD.,proposed,,,,BC,high
+Nicola Post and Rail,00030166,LOWER NICOLA,proposed,,,,BC,possible - shares the name but carries a word of its own
+Nicola Post and Rail,00101283,LOWER NICOLA BACKHOE INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Nicola Post and Rail,00096588,NICOLA LOG WORKS LIMITED,proposed,,,,BC,possible - shares the name but carries a word of its own
+Nicola Post and Rail,00096020,NICOLA PACIFIC FOREST PRODUCTS LTD.,proposed,,,,BC,high
+Nicola Post and Rail,00017408,NICOLA RANCH LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Nicola Post and Rail,00059348,UPPER NICOLA,proposed,,,,BC,possible - shares the name but carries a word of its own
+Otter Point Timber,00163731,OTTER POINT TIMBER LTD.,proposed,,,,BC,high
+Premium Cedar,00020277,PREMIUM CEDAR PRODUCTS LTD.,proposed,,,,BC,high
+Richmond Plywood (hog fuel),00103240,RICHMOND LOGGING LTD.,proposed,,,,BC,high
+Richmond Plywood (hog fuel),00002539,RICHMOND PLYWOOD CORPORATION LIMITED,proposed,,,,BC,high
+Richmond Plywood Corporation,00103240,RICHMOND LOGGING LTD.,proposed,,,,BC,high
+Richmond Plywood Corporation,00002539,RICHMOND PLYWOOD CORPORATION LIMITED,proposed,,,,BC,high
+Riverside Shingle Products,00137048,RIVERSIDE PROPERTIES INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Sigurdson Forest Products,00142343,BARRY SIGURDSON,proposed,,,,BC,possible - shares the name but carries a word of its own
+Sigurdson Forest Products,00022466,SIGURDSON BROS. LOGGING COMPANY LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Sigurdson Forest Products,00202215,SIGURDSON FOREST PRODUCTS CHILLIWACK LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Sigurdson Forest Products,00158536,SIGURDSON FOREST PRODUCTS LTD.,proposed,,,,BC,high
+Sigurdson Forest Products,00054562,VIOLET SIGURDSON,proposed,,,,BC,possible - shares the name but carries a word of its own
+Star Lumber,00132853,DAY STAR LOGGING LTD,proposed,,,,BC,possible - shares the name but carries a word of its own
+Star Lumber,00002341,NORTH STAR PLANING CO. LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Star Lumber,00044291,PINE STAR LOGGING LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Star Lumber,00159060,"POLAR STAR CANADIAN OIL AND GAS, INC.",proposed,,,,BC,possible - shares the name but carries a word of its own
+Star Lumber,00165037,SILVER STAR MAT SYSTEMS INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Star Lumber,00133580,SILVER STAR SKI RESORT LTD.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Star Lumber,00111029,SILVER STAR TIMBER INC.,proposed,,,,BC,possible - shares the name but carries a word of its own
+Weyerhaeuser,00115364,WEYERHAEUSER COMPANY LIMITED,proposed,,,,BC,high
+Weyerhaeuser,00196647,WEYERHAEUSER COMPANY LIMITED,proposed,,,,BC,high

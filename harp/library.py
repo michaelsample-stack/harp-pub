@@ -270,17 +270,45 @@ def cycle(features: list[dict], max_passes: int, clean_opts: dict,
 
 def build(root: str, month: str, features: list[dict], deliveries_path: str,
           opts: dict, source_files: list[str] | None = None,
-          run_id: str = "", log=print) -> dict:
+          run_id: str = "", validate: bool = True, log=print) -> dict:
     """Take a raw month through the cycle and stage it.
 
     Lands in pending if it comes out clean, quarantine if it does not.
+
+    `validate=False` shelves the month without checking it. The duplicate
+    geometry check is quadratic and a month of several thousand features can
+    take longer than everything else put together, which is a real cost when
+    the point of a run is to see whether the resolution worked.
+
+    A month staged this way is marked unvalidated in its manifest and its
+    filename, because the whole reason for the pending state is that somebody
+    checked. One that was not checked should not be mistaken for one that was.
     """
     if not MONTH.match(month):
         raise RuntimeError("month wants YYYY-MM, got '{}'".format(month))
 
     log("{:,} raw feature(s) for {}".format(len(features), month))
-    out = cycle(features, opts["max_passes"], opts["clean"],
-                opts["country_iso2"], log=log)
+    if validate and len(features) > 3000:
+        # The duplicate-geometry check is quadratic. On a month of several
+        # thousand features it can take longer than everything before it put
+        # together, and it produces no output while it runs - so say what is
+        # about to happen rather than appearing to hang.
+        log("  this is a large month and validation compares every geometry "
+            "against every other, so the next step is slow and quiet. "
+            "--no-validate skips it.")
+    if not validate:
+        log("")
+        log("validation and cleaning skipped by request.")
+        log("  This month has not been checked against the EUDR geometry "
+            "rules. It is staged so the rest of the run can be looked at, "
+            "and it is marked unvalidated - it should not be promoted or "
+            "delivered from until it has been through the cycle.")
+        out = {"ok": True, "features": list(features), "findings": [],
+               "required": 0, "recommended": 0, "passes": 0,
+               "history": [], "skipped": True}
+    else:
+        out = cycle(features, opts["max_passes"], opts["clean"],
+                    opts["country_iso2"], log=log)
 
     d = _dirs(root, opts.get("quarantine", ""))
     state = "pending" if out["ok"] else "quarantine"
@@ -297,8 +325,9 @@ def build(root: str, month: str, features: list[dict], deliveries_path: str,
     # Named for what it is and what state it is in. `harvest.geojson` in a
     # folder somebody has moved says nothing; this says both.
     fname = ("harvest-{}-QUARANTINED.geojson".format(month)
-             if state == "quarantine" else "harvest-{}-pending.geojson".format(
-                 month))
+             if state == "quarantine"
+             else "harvest-{}-pending{}.geojson".format(
+                 month, "-UNVALIDATED" if out.get("skipped") else ""))
     with open(os.path.join(dest, fname), "w",
               encoding="utf-8") as fh:
         json.dump({"type": "FeatureCollection", "name": "harp_harvest",
@@ -376,9 +405,24 @@ def build(root: str, month: str, features: list[dict], deliveries_path: str,
 
 def promote(root: str, month: str, who: str, force: bool = False,
             quarantine: str = "", log=print) -> str:
-    """Move a month from pending onto the shelf."""
+    """Move a month from pending onto the shelf.
+
+    A month staged without validation is refused unless forced. It reached
+    pending because somebody asked to skip the check, not because it passed
+    one, and the shelf is where a month goes once it is finished.
+    """
     d = _dirs(root, quarantine)
     src = os.path.join(d["pending"], month)
+    if os.path.isdir(src) and not force:
+        # Staged without being checked. Promoting it would put a month on the
+        # shelf that nobody validated, and the shelf is what a lot resolves
+        # against.
+        unchecked = [n for n in os.listdir(src) if "UNVALIDATED" in n]
+        if unchecked:
+            raise RuntimeError(
+                "{} was staged without validation and cannot be promoted.\n"
+                "  Re-run the month with validation on, or use --force if "
+                "you mean to shelve an unchecked month.".format(month))
     if not os.path.isdir(src):
         q = ""
         if os.path.isdir(d["quarantine"]):

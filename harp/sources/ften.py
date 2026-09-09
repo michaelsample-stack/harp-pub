@@ -41,6 +41,30 @@ DISTRICTS = ROOT + "/748/query"
 
 PAGE = 1000
 TIMEOUT = 180
+
+# A request that fails is tried again before being believed.
+#
+# The service rate-limits, and a limited request answers perfectly well thirty
+# seconds later. Trying once and giving up turned a throttle into a month where
+# 190 of 221 sources resolved to nothing - and because each failure was handled
+# correctly per source, the run finished looking healthy.
+RETRIES = 3
+BACKOFF = (2, 8, 20)
+
+# Identifiers per IN clause.
+#
+# Started at 200 and the service refused every batch - "Error performing query
+# operation", which is what it says for a where clause it cannot parse as much
+# as for one that is too long. A batch is only as good as its worst member,
+# and this data contains identifiers that are not marks at all: mill towns,
+# the slash form, and at least one mark ending in an apostrophe.
+#
+# So the batch is small to begin with and halves on failure until it isolates
+# whatever the service objected to. One bad identifier then costs one query
+# instead of two hundred.
+BATCH = 50
+
+
 ATTRIBUTION = ("Contains information licensed under the "
                "Open Government Licence - British Columbia.")
 
@@ -64,13 +88,81 @@ class ServiceError(RuntimeError):
     pass
 
 
-def _post(url: str, params: dict) -> dict:
+def _post_once(url: str, params: dict) -> dict:
+    """One attempt, no retry.
+
+    For a query whose failure is the query's own fault. Once the service has
+    been shown to answer, a where clause it rejects will be rejected again -
+    retrying it three times with backoff costs ninety seconds to learn
+    nothing, and doing that while splitting a batch is how a prefetch came to
+    take hours.
+    """
     r = requests.post(url, data=params, timeout=TIMEOUT)
+    if r.status_code == 429 or r.status_code >= 500:
+        raise ServiceError("HTTP {}".format(r.status_code))
     r.raise_for_status()
     data = r.json()
     if "error" in data:
         raise ServiceError(data["error"].get("message", str(data["error"])))
     return data
+
+
+def _retryable(exc, status: int = 0) -> bool:
+    """Is this worth trying again?
+
+    A timeout, a rate limit, or a server-side error will often answer on the
+    next attempt. A 400 will not - the request is malformed and will be
+    malformed again, so retrying it three times with backoff costs ninety
+    seconds to learn what the first attempt already said.
+
+    The service's own `Error performing query operation` is retryable. It is
+    what ArcGIS says when its backend errors, which happens transiently and
+    also happens for a day at a time - the probe is what tells those apart,
+    not this.
+    """
+    if status == 429 or status >= 500:
+        return True
+    if 400 <= status < 500:
+        return False
+    text = str(exc).lower()
+    return any(t in text for t in ("timeout", "timed out", "connection",
+                                   "error performing query"))
+
+
+def _post(url: str, params: dict, log=None) -> dict:
+    """One request, retried where retrying could help.
+
+    Retrying a malformed request is how a five-minute problem becomes an
+    afternoon: three attempts with backoff, on every call, for an answer that
+    was never going to change.
+    """
+    last = None
+    for attempt in range(RETRIES):
+        status = 0
+        try:
+            r = requests.post(url, data=params, timeout=TIMEOUT)
+            status = r.status_code
+            if status == 429 or status >= 500:
+                raise ServiceError("HTTP {}".format(status))
+            r.raise_for_status()
+            data = r.json()
+            if "error" in data:
+                # An error in the body carries its own code; the HTTP status
+                # is 200 either way.
+                status = int((data["error"] or {}).get("code") or 0)
+                raise ServiceError(data["error"].get("message",
+                                                     str(data["error"])))
+            return data
+        except Exception as exc:
+            last = exc
+            if attempt == RETRIES - 1 or not _retryable(exc, status):
+                break
+            wait = BACKOFF[min(attempt, len(BACKOFF) - 1)]
+            if log:
+                log("    service said no ({}), waiting {}s and trying "
+                    "again".format(str(exc).splitlines()[0][:70], wait))
+            time.sleep(wait)
+    raise ServiceError(str(last).splitlines()[0] if last else "unknown")
 
 
 def count(where: str) -> int:
@@ -349,14 +441,241 @@ def attributes_safe(where: str, **kw) -> tuple[list[dict], str]:
         return [], str(exc)
 
 
-def by_field(field: str, value: str) -> tuple[list[dict], str, str]:
+# ─────────────────────────────── prefetch ─────────────────────────────────
+#
+# The ladder asks one question per identifier per rung: 221 identifiers across
+# three fields is 660 requests, one after another, nothing cached between runs.
+# That is what gets a run throttled, and re-running the same month asks every
+# one again from scratch.
+#
+# A prefetch asks the same questions in batches - `TIMBER_MARK IN (...)` with
+# two hundred marks at a time - and hands the ladder an index to read instead.
+# Three fields at fifteen requests is forty times fewer, comfortably below any
+# throttle, and a cached index makes a re-run nearly free.
+#
+# It is an index, not a replacement. A rung that finds nothing in it still
+# falls through to a live query, because the prefetch only knows about the
+# identifiers it was given.
+
+PREFETCH_FIELDS = ("TIMBER_MARK", "HARVEST_AUTH_FOREST_FILE_ID",
+                   "CUT_BLOCK_FOREST_FILE_ID")
+
+
+class Index:
+    """What a batch of identifiers matched, by field and value.
+
+    `known` records which fields were successfully fetched. A field that
+    failed is not in it, so the ladder falls through to a live query for that
+    field rather than treating an outage as a miss - which is the distinction
+    that matters most here.
+    """
+
+    def __init__(self):
+        self.rows: dict[tuple, list] = {}
+        self.known: set = set()
+        # Identifiers the service refused even on their own. These were never
+        # answered, so they are not misses, and the ladder must still ask.
+        self.refused: set = set()
+
+    def get(self, field: str, value: str):
+        """Rows for one identifier, or None if it was not asked about.
+
+        None means fall through to a live query. That happens for a field
+        whose prefetch failed entirely, and for a single identifier the
+        service refused - both are questions nobody answered, and reading
+        either as a miss would say the register does not have something it
+        was never asked for.
+        """
+        if field not in self.known:
+            return None
+        key = (field, str(value or "").strip().upper())
+        if key in self.refused:
+            return None
+        return self.rows.get(key, [])
+
+    def __len__(self):
+        return sum(len(v) for v in self.rows.values())
+
+
+def _fetch_batched(field: str, values: list, log=print, size: int = BATCH):
+    """Every value for one field, in batches.
+
+    Returns (rows, refused). `rows` is None if the field could not be fetched
+    at all, which means the ladder should query as it goes.
+
+    **Probe, batch, fall back once.** A single identifier is tried first: if
+    that fails the service is not answering and the field is abandoned in one
+    request rather than discovering the same thing fifty times. A batch that
+    fails afterwards is retried as individual queries - once, not recursively.
+
+    An earlier version halved a failed batch and halved again down to single
+    identifiers. That was built to isolate one malformed identifier poisoning
+    a batch of fifty, a failure mode that was guessed at and never observed:
+    when the whole thing failed it was because BCGW's backend was down, and a
+    bare `where=1=1` count failed the same way from a browser. Recursion plus
+    the retry and its backoff turned a five-minute outage into hours of
+    silent waiting.
+    """
+    out, refused = [], set()
+    if not values:
+        return out, refused
+
+    # One identifier, with the normal retry, to see whether the field answers.
+    probe, err = attributes_safe("{} IN ('{}')".format(
+        field, sql_quote(values[0])))
+    if err:
+        log("    {} is not answering: {}".format(
+            field, str(err).splitlines()[0][:90]))
+        return None, refused
+    out.extend(probe)
+
+    done, remaining = 1, values[1:]
+    for start in range(0, len(remaining), size):
+        chunk = remaining[start:start + size]
+        quoted = ",".join("'{}'".format(sql_quote(v)) for v in chunk)
+        rows, error = _lookup_once("{} IN ({})".format(field, quoted))
+        if not error:
+            out.extend(rows)
+            done += len(chunk)
+        else:
+            # One fallback level. The batch failed, so ask about each of its
+            # identifiers on its own - which is what the ladder would have
+            # done anyway, so nothing is lost and the bad one is named.
+            log("    a batch of {} failed, asking individually".format(
+                len(chunk)))
+            for v in chunk:
+                rows, error = _lookup_once("{} = '{}'".format(
+                    field, sql_quote(v)))
+                if error:
+                    refused.add(v)
+                else:
+                    out.extend(rows)
+                done += 1
+        log("    {:<30}{:>4}/{:<5} identifier(s)".format(
+            field, done, len(values)))
+    return out, refused
+
+
+def prefetch(identifiers, fields=PREFETCH_FIELDS, log=print) -> Index:
+    """Ask about every identifier at once, a field at a time."""
+    idx = Index()
+    values = sorted({str(v or "").strip().upper() for v in identifiers
+                     if str(v or "").strip()})
+    if not values:
+        return idx
+
+    log("prefetching {:,} identifier(s) across {} field(s)".format(
+        len(values), len(fields)))
+    for field in fields:
+        rows, bad = _fetch_batched(field, values, log=log)
+        if rows is None:
+            # Every attempt failed, right down to single identifiers. That is
+            # the service being unavailable rather than one bad value, and an
+            # incomplete index is worse than none - a miss in it would read as
+            # "not in the register" when it means "not asked".
+            log("  {} could not be prefetched".format(field))
+            continue
+        for r in rows:
+            key = (field, str(r.get(field) or "").strip().upper())
+            idx.rows.setdefault(key, []).append(r)
+        # Everything asked about and answered, including the misses - so a
+        # re-run needs none of it.
+        for v in values:
+            if v in bad:
+                continue
+            remember(field, v, idx.rows.get((field, v), []))
+        for v in bad:
+            idx.refused.add((field, str(v or "").strip().upper()))
+        idx.known.add(field)
+        hits = len({k[1] for k in idx.rows if k[0] == field})
+        note = ""
+        if bad:
+            # Named, because an identifier the register cannot be asked about
+            # is a finding - it is usually malformed rather than absent.
+            note = "   ({} identifier(s) the service refused: {})".format(
+                len(bad), ", ".join(sorted(bad)[:4]))
+        log("  {:<32}{:>6,} row(s) against {:,} identifier(s){}".format(
+            field, len(rows), hits, note))
+
+    if not idx.known:
+        log("  nothing prefetched - the ladder will query as it goes")
+    return idx
+
+
+# Set by a run so lookups survive between them. A module-level handle rather
+# than a parameter threaded through six call sites, because every one of them
+# would pass the same thing.
+_cache = None
+
+
+def use_cache(cache) -> None:
+    """Give the source a cache to read and write. None disables it."""
+    global _cache
+    _cache = cache
+
+
+def cached_by_field(field: str, value: str) -> tuple[list[dict], str] | None:
+    """What the cache knows about one identifier, or None if it knows nothing.
+
+    A miss is cached too, and separately: "the register does not have this"
+    is an answer worth keeping, and it expires sooner because a mark absent
+    today may be issued next month.
+    """
+    if _cache is None:
+        return None
+    key = "{}={}".format(field, str(value or "").strip().upper())
+    hit = _cache.get("ften_lookup", key)
+    if hit is not None:
+        return hit, ""
+    if _cache.get("ften_miss", key) is not None:
+        return [], ""
+    return None
+
+
+def remember(field: str, value: str, rows: list) -> None:
+    if _cache is None:
+        return
+    key = "{}={}".format(field, str(value or "").strip().upper())
+    if rows:
+        _cache.put("ften_lookup", key, rows)
+    else:
+        _cache.put("ften_miss", key, True)
+
+
+def _lookup_once(where: str) -> tuple[list[dict], str]:
+    """Attributes for a where clause, one attempt, error as a string."""
+    try:
+        data = _post_once(BLOCKS, {
+            "where": where, "outFields": LOOKUP_FIELDS,
+            "returnGeometry": "false", "resultRecordCount": PAGE,
+            "f": "json"})
+        return [f.get("attributes", {}) for f in data.get("features", [])], ""
+    except Exception as exc:
+        return [], str(exc).splitlines()[0][:160]
+
+
+def by_field(field: str, value: str, index=None) -> tuple[list[dict], str, str]:
     """Exact match on one field.
 
     Returns (rows, where, error). The error is empty on success; a non-empty
     error means the service failed, which is not the same as no match.
     """
     where = "{} = '{}'".format(field, sql_quote(value).upper())
+    if index is not None:
+        hit = index.get(field, value)
+        if hit is not None:
+            # The index was built for this field, so an empty list is a real
+            # miss rather than a question nobody asked.
+            return hit, where, ""
+    known = cached_by_field(field, value)
+    if known is not None:
+        return known[0], where, known[1]
     rows, err = attributes_safe(where)
+    if not err:
+        # Only a real answer is remembered. A service error is not a fact
+        # about the identifier, and caching one would make an outage
+        # permanent.
+        remember(field, value, rows)
     return rows, where, err
 
 

@@ -24,6 +24,17 @@ TTL = {
     "schema": 7 * 24 * 3600,       # field names have changed before
     "district": None,              # administrative boundaries are stable
     "geometry": 0,                 # never cached - blocks are added and retired
+    # Which blocks a timber mark covers, and who holds it. A mark's blocks do
+    # change - one can be added to an existing mark - so this is a week rather
+    # than a year, which is short enough to stay current and long enough that
+    # re-running the same month costs nothing.
+    #
+    # The point is not speed. A run makes several hundred requests against a
+    # public register, and the register goes down: on the day it did, every
+    # source resolved to nothing and the whole run was wasted. With this, a
+    # re-run only asks about what it has not already got.
+    "ften_lookup": 7 * 24 * 3600,
+    "ften_miss": 2 * 24 * 3600,    # absent today, issued next week
 }
 
 

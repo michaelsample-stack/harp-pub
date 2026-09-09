@@ -309,6 +309,8 @@ def enrich(tenure: list[dict], catchments: list[dict], detections: list[dict],
                     "harp_detected": True,
                     "harp_detected_first": (d["date"].isoformat()
                                             if d["date"] else ""),
+                    # Bracketed later, in one place, so every route gets the
+                    # same convention rather than each inventing its own.
                     "harp_detection_type": d.get("feature_type", ""),
                     "harp_tier": tier,
                     "harp_is_envelope": False,

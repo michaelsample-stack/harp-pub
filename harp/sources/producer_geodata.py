@@ -351,6 +351,13 @@ def read(paths, month: str = "", mark_lookup=None, log=print) -> tuple:
             "harp_traceability": "declared",
             "harp_is_envelope": False,
             "harp_declared_by_supplier": True,
+            # What the producer said about the harvest itself, kept apart
+            # from the production dates - those say when the wood ran at the
+            # mill, which is a different question.
+            "harp_declared_start": str(props.get("HarvestStartDate")
+                                       or "").strip()[:10],
+            "harp_declared_end": str(props.get("HarvestEndDate")
+                                     or "").strip()[:10],
             "harp_production_from": first,
             "harp_production_to": last,
             "harp_production_months": " ".join(sorted(months)),

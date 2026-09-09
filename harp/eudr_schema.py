@@ -63,6 +63,7 @@ file Californian harvest as Canadian, and nothing downstream would notice.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 
 # Jurisdiction to ISO 3166-1 alpha-2.
@@ -82,7 +83,14 @@ COUNTRY = {
 }
 
 # The four, in the order a reader expects them.
-FIELDS = ("ProducerName", "ProducerCountry", "ProductionPlace", "Area")
+FIELDS = ("ProducerName", "ProducerCountry", "ProductionPlace", "Area",
+          # Not required by the regulation. Asked for by the client on behalf
+          # of their downstream customers, and carried because they asked.
+          "HarvestStartDate", "HarvestEndDate", "Species",
+          # Set only where a value was estimated. Carried so a delivered file
+          # containing estimates can be told from one that does not - the
+          # harp_ fields that would otherwise say so are stripped here.
+          "Estimated")
 
 
 def country_of(jurisdiction: str) -> str:
@@ -200,6 +208,34 @@ def project_feature(feature: dict) -> tuple[dict, list]:
         out["ProductionPlace"] = place
     else:
         missing.append("ProductionPlace")
+
+    # Not required by the regulation. Carried because the client asked for
+    # it on behalf of their downstream customers.
+    raw = str(props.get("harp_species_json") or "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            parsed = None
+        if parsed:
+            out["Species"] = parsed
+        else:
+            missing.append("Species")
+    else:
+        missing.append("Species")
+
+    est = str(props.get("harp_estimated") or "").strip()
+    if est:
+        out["Estimated"] = est
+    # Not listed as missing when absent: most features have nothing estimated
+    # and that is the normal case, not a gap.
+
+    for key in ("HarvestStartDate", "HarvestEndDate"):
+        v = str(props.get(key) or "").strip()
+        if v:
+            out[key] = v
+        else:
+            missing.append(key)
 
     area, _basis = area_of(feature)
     if area > 0:

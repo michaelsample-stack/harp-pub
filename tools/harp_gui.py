@@ -35,9 +35,10 @@ from tkinter import filedialog, messagebox, ttk
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import harp                                                    # noqa: E402
-from harp import (assemble, config, detect as detect_stage,    # noqa: E402
+from harp import (assemble, catchments, config, detect as detect_stage,  # noqa: E402
                   detection_api, io, library as library_stage,
                   eudr_schema, lots as lots_stage, mills as mills_mod,
+                  reference as reference_mod,
                   package,
                   run as run_stage)
 from harp.resolution import Tier                               # noqa: E402
@@ -65,6 +66,9 @@ STAGES = [
     ("detect",   "Detect",       "submit and wait"),
     ("enrich",   "Join back",    "attribution recovered"),
     ("write",    "The month",    "one collection"),
+    ("dates",    "Harvest dates", "bracketed from detection"),
+    ("species",  "Species",      "from the national rasters"),
+    ("gaps",     "Gaps",         "estimated from neighbours"),
     ("eudr",     "EUDR fields",  "added, not substituted"),
     ("validate", "Validate",     "eudr_geojson, then clean"),
     ("stage",    "Stage",        "pending, awaiting approval"),
@@ -98,6 +102,7 @@ class App(tk.Tk):
         self.to_month = tk.StringVar(value="")
         self.to_year = tk.StringVar(value="")
         self.max_block = tk.StringVar(value="2000")
+        self.skip_validate = tk.BooleanVar(value=False)
         self.api_base = tk.StringVar(value=detection_api.DEFAULT_BASE)
         self.library_dir = tk.StringVar(value="")
         self.who = tk.StringVar(value=os.environ.get("USERNAME")
@@ -189,6 +194,11 @@ class App(tk.Tk):
             ttk.Button(r, text="…", width=3, command=cmd).pack(side="left")
             ttk.Label(r, text=hint, foreground=MUTED,
                       width=36).pack(side="left", padx=6)
+            if var is self.register_file:
+                # Directly under the field, because a wrong file here is
+                # silent everywhere else.
+                self.register_note = ttk.Label(g, text="", foreground=MUTED)
+                self.register_note.pack(anchor="w", padx=(140, 0))
 
         self.drop_note = ttk.Label(g, text="", foreground=MUTED)
         self.drop_note.pack(anchor="w", padx=10, pady=(2, 0))
@@ -225,6 +235,12 @@ class App(tk.Tk):
         ttk.Entry(r, textvariable=self.max_block, width=7).pack(side="left")
         ttk.Label(r, text="ha are search areas",
                   foreground=MUTED).pack(side="left", padx=4)
+        ttk.Checkbutton(r, text="skip validation",
+                        variable=self.skip_validate,
+                        command=self._describe_validate).pack(side="left",
+                                                              padx=(24, 0))
+        self.validate_note = ttk.Label(r, text="", foreground=WARN)
+        self.validate_note.pack(side="left", padx=8)
         for v in (self.from_month, self.from_year, self.to_month,
                   self.to_year):
             v.trace_add("write", lambda *_a: self._describe_window())
@@ -271,7 +287,9 @@ class App(tk.Tk):
         cards.pack(fill="x", padx=10, pady=10)
         self.cards = {}
         for key, label in (("sources", "Sources"), ("detections", "Detections"),
-                           ("harvest", "Harvest areas"), ("direct", "Direct"),
+                           ("harvest", "Harvest areas"), ("dated", "Dated"),
+                           ("estimated", "Estimated"),
+                           ("direct", "Direct"), ("declared", "Declared"),
                            ("indirect", "Indirect"), ("inferred", "Inferred")):
             f = ttk.Frame(cards, relief="solid", borderwidth=1)
             f.pack(side="left", padx=(0, 8), ipadx=13, ipady=7)
@@ -462,6 +480,11 @@ class App(tk.Tk):
             ttk.Button(r, text="…", width=3, command=cmd).pack(side="left")
             ttk.Label(r, text=hint, foreground=MUTED,
                       width=36).pack(side="left", padx=6)
+            if var is self.register_file:
+                # Directly under the field, because a wrong file here is
+                # silent everywhere else.
+                self.register_note = ttk.Label(g, text="", foreground=MUTED)
+                self.register_note.pack(anchor="w", padx=(140, 0))
         ttk.Label(g, text="Both are filled in from the drop when you choose "
                           "one on the first tab.",
                   foreground=MUTED).pack(anchor="w", padx=10, pady=(2, 0))
@@ -741,7 +764,58 @@ class App(tk.Tk):
 
     def pick_register(self):
         self._ask(self.register_file, "Supplier register",
-                  filetypes=[("Excel", "*.xlsx"), ("All", "*.*")])
+                  filetypes=[("Register", "*.csv *.xlsx"), ("All", "*.*")])
+        self._check_register()
+
+    def _check_register(self):
+        """Say straight away whether this file is a register.
+
+        Its absence is the quietest failure in the pipeline - no register
+        means no supplier gets a search area, and a month resolves what it can
+        from marks and produces nothing for the rest without a word. A file
+        that is not a register does the same thing, and that has happened: a
+        report about the suppliers was picked instead of the register, and the
+        run reached stage three before finding nothing.
+        """
+        path = self.register_file.get().strip()
+        if not path:
+            self.register_note.config(
+                text="using the packaged register", foreground=MUTED)
+            return
+        if not os.path.isfile(path):
+            self.register_note.config(text="that file is not there",
+                                      foreground=BAD)
+            return
+        try:
+            rows = catchments.read_sources(path)
+        except Exception as exc:
+            self.register_note.config(
+                text="could not read it: {}".format(str(exc)[:60]),
+                foreground=BAD)
+            return
+        if not rows:
+            self.register_note.config(
+                text="no suppliers in that file - is it a register, or a "
+                     "report about one?", foreground=BAD)
+            return
+        need = sum(1 for r in rows
+                   if str(r.get("outstanding") or "0").strip()
+                   not in ("", "0", "0.0"))
+        if not need:
+            # This is the one that matters. A report about the suppliers reads
+            # perfectly well - 85 rows, right column names - and reports that
+            # nobody needs anything, so the run builds no search areas and
+            # says nothing. Reading the file is not enough; it has to have the
+            # column that carries the work.
+            self.register_note.config(
+                text="{} supplier(s), but none of them needs a search area. "
+                     "That is either a finished month or the wrong file - a "
+                     "report about the suppliers rather than the register."
+                     .format(len(rows)), foreground=WARN)
+            return
+        self.register_note.config(
+            text="{} supplier(s), {} needing a search area".format(
+                len(rows), need), foreground=MUTED)
 
     def pick_mills(self):
         self._ask(self.mills_file, "Mill locations",
@@ -776,6 +850,12 @@ class App(tk.Tk):
         for v in (self.from_month, self.from_year, self.to_month,
                   self.to_year):
             v.set("")
+
+    def _describe_validate(self):
+        """Say what skipping the check costs, at the moment it is ticked."""
+        self.validate_note.config(
+            text=("the month will be staged unchecked and cannot be promoted"
+                  if self.skip_validate.get() else ""))
 
     def _describe_window(self):
         start, end = self._window()
@@ -842,6 +922,24 @@ class App(tk.Tk):
             self.paths.insert("", "end", values=("library",
                                                  self.library_dir.get()))
         self.deps.delete(*self.deps.get_children())
+        # The reference data first. A missing mill locations file is the one
+        # that costs a month quietly - every supplier falls back to a circle
+        # round a town name and nothing says so.
+        try:
+            for item in reference_mod.describe(self.cfg):
+                where = os.path.basename(item["path"]) or "not found"
+                if item["packaged"]:
+                    where += "  (shipped with the package)"
+                self.deps.insert("", "end", tags=("ok" if item["rows"] or
+                                                 item["label"] ==
+                                                 "stated areas" else "no",),
+                                 values=(item["label"],
+                                         "{} row(s)".format(item["rows"]),
+                                         where))
+        except Exception as exc:
+            self.deps.insert("", "end", tags=("no",),
+                             values=("reference data", "unreadable",
+                                     str(exc)[:80]))
         for name, why in (("requests", "every registry call"),
                           ("shapely", "geometry, unions, spatial joins"),
                           ("pyproj", "area measured on the ellipsoid"),
@@ -849,7 +947,8 @@ class App(tk.Tk):
                           ("openpyxl", "the same, for xlsx"),
                           ("eudr_geojson", "validating a month"),
                           ("eudr_clean", "cleaning what fails"),
-                          ("bcparcel", "private marks to titled parcels")):
+                          ("bcparcel", "private marks to titled parcels"),
+                          ("ee", "species, from the national rasters")):
             try:
                 __import__(name)
                 ok = True
@@ -963,6 +1062,7 @@ class App(tk.Tk):
             register=self.register_file.get().strip(),
             mills_csv=self.mills_file.get().strip(),
             max_block_ha=max_block,
+            validate=not self.skip_validate.get(),
             api_base=self.api_base.get().strip())
         written.extend(out.get("written", []))
 
@@ -988,16 +1088,43 @@ class App(tk.Tk):
             self.cards["harvest"].config(
                 text="{:,}".format(out.get("month_features", 0))
                 if out.get("month_features") else "—")
-            for k in ("direct", "indirect", "inferred"):
+            for k in ("direct", "declared", "indirect", "inferred"):
                 self.cards[k].config(
                     text="{:,}".format(trace.get(k, 0)) if trace else "—")
+            dated = out.get("dated", 0)
+            total = out.get("month_features", 0)
+            self.cards["dated"].config(
+                text="{:,}".format(dated) if dated else "—")
+            est = out.get("estimated", 0)
+            over = out.get("estimates_over_threshold")
+            # Amber only where too much of the month was estimated. The
+            # number on its own reads as neutral, and above the threshold it
+            # is not; below it, the theme's own colour is right.
+            self.cards["estimated"].config(text="{:,}".format(est) if est
+                                           else "—")
+            if over:
+                self.cards["estimated"].config(foreground=WARN)
 
             if stopped == "staged":
                 if lib == "pending":
                     txt = ("{:,} harvest area(s) for {}, validated and waiting "
                            "on approval. Go to the Library tab to shelve it."
                            .format(out.get("month_features", 0), month))
+                    if total and dated < total:
+                        # An undated feature is not a fault - a block cut in an
+                        # earlier month will not be found in this one - but it
+                        # is the number somebody will be asked about.
+                        txt += (" {:,} carry no harvest date; each says why on "
+                                "harp_harvest_basis.".format(total - dated))
                     colour = MUTED
+                    if over and total:
+                        # The lamp goes amber and the log says so at length,
+                        # but this line is what somebody reads first.
+                        txt = ("{:.0f}% of this month was estimated rather "
+                               "than found. That is over the threshold - "
+                               "look at the run log before shelving it. "
+                               .format(est / total * 100) + txt)
+                        colour = WARN
                 else:
                     txt = ("{} went to quarantine — Required findings are "
                            "still standing after cleaning. It needs hands on "

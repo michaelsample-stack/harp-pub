@@ -51,6 +51,37 @@ sources:
       convert_small_polygons: false
       remove_proximate_vertices: false
 
+  species:
+    # What was growing on each harvest area, from the Canadian species raster
+    # and the US forest type raster. On by default; a run without Earth Engine
+    # reachable says so and carries on without it.
+    enabled: true
+    # Pencilled in. Any registered Earth Engine project works - this is the
+    # one the detection service runs from.
+    project: eo-sandbox
+
+  reference:
+    # The supplier alias table, mill locations and stated areas. Shipped with
+    # the package; set a folder here to use a different set. A file already
+    # sitting in data/registry is preferred over the packaged copy either way,
+    # so editing one locally does what you expect.
+    path: ""
+
+  gaps:
+    # Estimate what the detection service and the species rasters could not
+    # answer, from the nearest features that could.
+    #
+    # On. A deliverable with blank fields is not a deliverable, and the
+    # services leave a few percent unanswered every month. Every filled
+    # feature is marked on harp_estimated and its basis says so.
+    enabled: true
+    neighbours: 5
+    max_km: 20
+    # Above this share of the month, estimating is no longer filling gaps -
+    # it is covering for something that went wrong earlier, and the run says
+    # so loudly.
+    warn_above: 0.15
+
   lots:
     # From the client's own master data table, 31 August 2026. Awaiting
     # confirmation - see the email to Angela.

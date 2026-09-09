@@ -1,12 +1,16 @@
-"""Search areas — one for every source that no identifier could place.
+#!/usr/bin/env python3
+"""Build the catchment layer — one search area for every source that needs one.
 
+    python tools/build_catchments.py --register HPA1_Geometry_Sources_v1_0.xlsx \\
+           --mills mill_out/supplier_locations_*.csv \\
+           --aliases data/registry/supplier_aliases.csv
 
 WHAT A CATCHMENT IS HERE
 ------------------------
 An area to search inside, not an answer. Every polygon in this layer is a
 bounded region within which a supplier's fibre plausibly originated; change
 detection then finds the ground that was actually disturbed. Nothing here is a
-directly traced and nothing here should reach a declaration unrefined.
+plot claim and nothing here should reach a declaration unrefined.
 
 That is the pattern the other engagements use. Enviva buffers a mill by a
 configurable radius and then queries harvest polygons inside it - the buffer is
@@ -43,10 +47,12 @@ true circle on the ground rather than a distorted one in degrees.
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import os
 import re
+import sys
 import time
 from datetime import datetime
 
@@ -295,7 +301,6 @@ def operator_blocks(client_number: str, limit: int = 0,
             d = post("{}/{}/query".format(ROOT, BLOCKS), {
                 "where": where,
                 "outFields": ("OBJECTID,TIMBER_MARK,CLIENT_NAME,"
-                              "CLIENT_NUMBER,"
                               "GEOGRAPHIC_DISTRICT_CODE,FEATURE_AREA,"
                               "DISTURBANCE_START_DATE"),
                 "returnGeometry": "true", "outSR": 4326,
@@ -351,25 +356,11 @@ def town_district(text: str) -> tuple[str, str, str]:
 
 
 def read_sources(path: str) -> list[dict]:
-    """Suppliers and their outstanding sources, from the supplier register.
-
-    Takes either a CSV or a workbook. The shipped copy is a CSV because it is
-    diffable in git and reviewing a change to who needs a search area is worth
-    being able to do; a workbook straight from the client's own file is read
-    the same way, from its `Suppliers` sheet.
-    """
-    if path.lower().endswith((".csv", ".txt")):
-        import csv as _csv
-        with open(path, encoding="utf-8-sig", newline="") as fh:
-            rows = [tuple(r) for r in _csv.reader(fh)]
-    else:
-        from openpyxl import load_workbook
-        wb = load_workbook(path, read_only=True, data_only=True)
-        sheet = ("Suppliers" if "Suppliers" in wb.sheetnames
-                 else wb.sheetnames[0])
-        rows = list(wb[sheet].iter_rows(values_only=True))
-    if not rows:
-        return []
+    """Suppliers and their outstanding sources, from the geometry source map."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path, read_only=True, data_only=True)
+    sheet = "Suppliers" if "Suppliers" in wb.sheetnames else wb.sheetnames[0]
+    rows = list(wb[sheet].iter_rows(values_only=True))
     hdr = [str(h or "").strip().lower() for h in rows[0]]
 
     def col(*names):
@@ -579,53 +570,10 @@ def feature(geom, props) -> dict:
     return {"type": "Feature", "geometry": geom, "properties": props}
 
 
-def _producer_of(source: dict, name: str) -> tuple:
-    """Who to name as the producer of a search area, and how sure we are.
-
-    A search area is a place to look, and the only thing known about who cut
-    there is who the client bought from. That is the supplier, not necessarily
-    the harvester - a broker or a reload names somebody else on the register -
-    so the source field says as much.
-
-    Without this every detection found inside a search area inherits a blank,
-    which was 95% of one real month: the district, county, national forest,
-    stated area and mill buffer routes all built areas with no producer at
-    all, and only operator tenure set one.
-    """
-    for key in ("supplier_name", "name", "supplier"):
-        v = str(source.get(key) or "").strip()
-        # A bare code identifies a purchasing arrangement rather than a
-        # company and may cover several - it is never used as a name.
-        if v and v.upper() != str(source.get("code") or "").upper():
-            return v, "the client's own name for this supplier"
-    v = str(name or "").strip()
-    if v and v.upper() != str(source.get("code") or "").upper():
-        return v, "the client's own name for this supplier"
-    return "", ""
-
-
-def _state_of(source: dict) -> str:
-    """Where a supplier is, as the register that placed them knows it.
-
-    Without this every search area is built with no jurisdiction, and so is
-    every detection that inherits from one. That is not a cosmetic gap: the
-    EUDR country field derives from it, and a blank falls back to the config
-    default - which quietly declared Californian harvest as Canadian.
-    """
-    for key in ("jurisdiction", "state", "stateid", "province"):
-        v = str(source.get(key) or "").strip().upper()
-        if v:
-            return v
-    # A US route reached this supplier, so they are not in BC even if nothing
-    # says which state.
-    return "US"
-
-
 def build(sources, mills, aliases, radius_km, block_limit, identifiers=None,
-          stated=None, log=print) -> dict:
+          log=print) -> dict:
     feats, summary = [], []
     identifiers = identifiers or {}
-    stated = stated or {}
 
     for s in sources:
         name = s["supplier"]
@@ -661,18 +609,15 @@ def build(sources, mills, aliases, radius_km, block_limit, identifiers=None,
                     feats.append(feature(geom, {
                         "harp_supplier": name,
                         "harp_supplier_code": s["code"],
-                        "harp_jurisdiction": _state_of(s),
                         "harp_method": "national forest",
-                        "ProducerName": _producer_of(s, name)[0],
-                        "harp_producer_source": _producer_of(s, name)[1],
                         "harp_source_system": "USDA Forest Service boundaries",
                         "harp_key": forest, "harp_key_name": forest,
                         "harp_basis": ("this supplier buys its timber from {} "
                                        "sales; mill at '{}'".format(forest,
                                                                     f_town)),
                         "harp_declared_by_supplier": False,
-                        "harp_tier": "P3a", "harp_is_envelope": True,
-                        "harp_traceability": "inferred",
+                        "harp_tier": "P4", "harp_is_envelope": True,
+                        "harp_plot_claimable": False,
                         "harp_note": ("the national forest the supplier buys "
                                       "from. Federal land, and a truer "
                                       "catchment than the census area"),
@@ -686,10 +631,7 @@ def build(sources, mills, aliases, radius_km, block_limit, identifiers=None,
                     continue
                 feats.append(feature(geom, {
                     "harp_supplier": name, "harp_supplier_code": s["code"],
-                    "harp_jurisdiction": _state_of(s),
                     "harp_method": "named county",
-                    "ProducerName": _producer_of(s, name)[0],
-                    "harp_producer_source": _producer_of(s, name)[1],
                     "harp_source_system": "US Census county boundaries",
                     "harp_key": fips,
                     "harp_key_name": "{} County, {}".format(county, state),
@@ -697,8 +639,8 @@ def build(sources, mills, aliases, radius_km, block_limit, identifiers=None,
                                    "source identifier".format(us_town)),
                     "harp_declared_by_supplier": False,
                     "harp_also_in_register": bool(us_named),
-                    "harp_tier": "P3a", "harp_is_envelope": True,
-                    "harp_traceability": "inferred",
+                    "harp_tier": "P4", "harp_is_envelope": True,
+                    "harp_plot_claimable": False,
                     "harp_note": ("one of {} counties this supplier operates "
                                   "across".format(len(counties))
                                   if len(counties) > 1 else
@@ -732,16 +674,7 @@ def build(sources, mills, aliases, radius_km, block_limit, identifiers=None,
                     at = b["attrs"]
                     feats.append(feature(b["geometry"], {
                         "harp_supplier": name, "harp_supplier_code": s["code"],
-                        "harp_jurisdiction": "BC",
                         "harp_method": "operator tenure",
-                        # The block's own holder, not the alias we matched on.
-                        # They agree in the normal case, and where they differ
-                        # the register is right.
-                        "ProducerName": (at.get("CLIENT_NAME")
-                                         or a.client_name or ""),
-                        "harp_producer_number": (at.get("CLIENT_NUMBER")
-                                                 or a.client_number or ""),
-                        "harp_producer_source": "forest register",
                         "harp_source_system": "FTEN cut block register",
                         "harp_key": a.client_number,
                         "harp_key_name": a.client_name or at.get("CLIENT_NAME"),
@@ -751,8 +684,8 @@ def build(sources, mills, aliases, radius_km, block_limit, identifiers=None,
                         "district": at.get("GEOGRAPHIC_DISTRICT_CODE"),
                         "area_ha": round(float(at.get("FEATURE_AREA") or 0)
                                          / 10000.0, 2),
-                        "harp_tier": "P2a", "harp_is_envelope": True,
-                        "harp_traceability": "inferred",
+                        "harp_tier": "P2", "harp_is_envelope": True,
+                        "harp_plot_claimable": False,
                         "harp_note": ("everywhere this operator cut, not what "
                                       "this client bought"),
                         "harp_attribution": ATTRIBUTION,
@@ -770,18 +703,15 @@ def build(sources, mills, aliases, radius_km, block_limit, identifiers=None,
             if geom:
                 feats.append(feature(geom, {
                     "harp_supplier": name, "harp_supplier_code": s["code"],
-                    "harp_jurisdiction": "BC",
                     "harp_method": "named district",
-                    "ProducerName": _producer_of(s, name)[0],
-                    "harp_producer_source": _producer_of(s, name)[1],
                     "harp_source_system": "BC Natural Resource Districts",
                     "harp_key": code,
                     "harp_key_name": mill.get("district", ""),
                     "harp_basis": mill.get("how_established", ""),
                     "harp_declared_by_supplier": False,
                     "harp_mill": mill.get("facility", ""),
-                    "harp_tier": "P3a", "harp_is_envelope": True,
-                    "harp_traceability": "inferred",
+                    "harp_tier": "P4", "harp_is_envelope": True,
+                    "harp_plot_claimable": False,
                     "harp_note": ("the district the mill sits in. The wood may "
                                   "come from elsewhere - this bounds a search, "
                                   "it does not locate a harvest"),
@@ -800,20 +730,14 @@ def build(sources, mills, aliases, radius_km, block_limit, identifiers=None,
                     feats.append(feature(geom, {
                         "harp_supplier": name,
                         "harp_supplier_code": s["code"],
-                        # A BC natural resource district is in BC. This route
-                        # was the one that missed it, and fourteen features a
-                        # month inherited no country as a result.
-                        "harp_jurisdiction": "BC",
                         "harp_method": "named district",
-                        "ProducerName": _producer_of(s, name)[0],
-                        "harp_producer_source": _producer_of(s, name)[1],
                         "harp_source_system": "BC Natural Resource Districts",
                         "harp_key": code, "harp_key_name": dname,
                         "harp_basis": ("inferred from the mill town '{}' in "
                                        "the source identifier".format(town)),
                         "harp_declared_by_supplier": False,
-                        "harp_tier": "P3a", "harp_is_envelope": True,
-                        "harp_traceability": "inferred",
+                        "harp_tier": "P4", "harp_is_envelope": True,
+                        "harp_plot_claimable": False,
                         "harp_note": ("the district the mill sits in, inferred "
                                       "rather than declared. The wood may come "
                                       "from elsewhere - Mercer mills at "
@@ -823,74 +747,6 @@ def build(sources, mills, aliases, radius_km, block_limit, identifiers=None,
                     }))
                     made, method = 1, "named district"
                     note = "district {} from '{}'".format(code, town)
-
-        # 2b — an area somebody stated by hand
-        #
-        # After every register route and before the mill buffer. A stated
-        # area never overrides a tenure record, and always beats a circle
-        # drawn round a mill - which is a guess with no author, where this at
-        # least has one.
-        if not made and name in stated:
-            e = stated[name]
-            parts = []
-            for code in e.get("districts") or []:
-                geom = district_polygon(code)
-                if not geom:
-                    continue
-                feats.append(feature(geom, {
-                    "harp_supplier": name,
-                    "harp_supplier_code": s["code"],
-                    "harp_jurisdiction": "BC",
-                    "harp_method": "stated area",
-                    "ProducerName": _producer_of(s, name)[0],
-                    "harp_producer_source": _producer_of(s, name)[1],
-                    "harp_source_system": "BC Natural Resource Districts",
-                    "harp_key": code,
-                    "harp_basis": "{} on {}: {}".format(
-                        e.get("stated_by") or "?", e.get("stated_at") or "?",
-                        e.get("basis") or "stated"),
-                    # Only a supplier's own words count as declared. Anyone
-                    # else stating it, however well informed, is inference
-                    # with an author.
-                    "harp_declared_by_supplier": e.get("basis") == "supplier",
-                    "harp_tier": "P3a",
-                    "harp_is_envelope": True,
-                    "harp_traceability": "inferred",
-                    "harp_note": (e.get("note") or
-                                  "an operating area stated by hand, because "
-                                  "no register could place this supplier"),
-                    "harp_attribution": ATTRIBUTION,
-                }))
-                parts.append(code)
-            for fips in e.get("counties") or []:
-                geom = us_county(fips)
-                if not geom:
-                    continue
-                feats.append(feature(geom, {
-                    "harp_supplier": name,
-                    "harp_supplier_code": s["code"],
-                    "harp_jurisdiction": (e.get("state") or _state_of(s)),
-                    "harp_method": "stated area",
-                    "ProducerName": _producer_of(s, name)[0],
-                    "harp_producer_source": _producer_of(s, name)[1],
-                    "harp_source_system": "US Census county boundaries",
-                    "harp_key": fips,
-                    "harp_basis": "{} on {}: {}".format(
-                        e.get("stated_by") or "?", e.get("stated_at") or "?",
-                        e.get("basis") or "stated"),
-                    "harp_declared_by_supplier": e.get("basis") == "supplier",
-                    "harp_tier": "P3a",
-                    "harp_is_envelope": True,
-                    "harp_traceability": "inferred",
-                    "harp_note": (e.get("note") or
-                                  "an operating area stated by hand"),
-                    "harp_attribution": ATTRIBUTION,
-                }))
-                parts.append(fips)
-            if parts:
-                made, method = len(parts), "stated area"
-                note = "{} stated by {}".format(", ".join(parts),
-                                                e.get("stated_by") or "?")
 
         # 3 — a circle round the mill
         if not made:
@@ -905,17 +761,14 @@ def build(sources, mills, aliases, radius_km, block_limit, identifiers=None,
                     feats.append(feature(geom, {
                         "harp_supplier": name,
                         "harp_supplier_code": s["code"],
-                        "harp_jurisdiction": _state_of(s),
                         "harp_method": "mill buffer",
-                        "ProducerName": _producer_of(s, name)[0],
-                        "harp_producer_source": _producer_of(s, name)[1],
                         "harp_source_system": "BC Major Timber Processing "
                                               "Facilities",
                         "harp_key": mill.get("facility", ""),
                         "harp_radius_km": radius_km,
                         "harp_mill_lat": lat, "harp_mill_lon": lon,
-                        "harp_tier": "P3a", "harp_is_envelope": True,
-                        "harp_traceability": "inferred",
+                        "harp_tier": "P4", "harp_is_envelope": True,
+                        "harp_plot_claimable": False,
                         "harp_note": ("a circle of assumed haul distance. The "
                                       "radius is a starting position, not a "
                                       "measurement"),
@@ -945,10 +798,111 @@ def build(sources, mills, aliases, radius_km, block_limit, identifiers=None,
                          "bounds a region within which a supplier's fibre "
                          "plausibly originated. Change detection finds the "
                          "ground actually disturbed; nothing here is a plot "
-                         "traced."),
+                         "claim."),
                 "methods": {
                     "operator tenure": "the company's own cut blocks, FTEN",
                     "named district": "published district boundary",
                     "mill buffer": "circle of assumed haul distance",
                 }},
             "features": feats}, summary
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--register", required=True,
+                    help="the geometry sources xlsx")
+    ap.add_argument("--mills", help="supplier_locations csv")
+    ap.add_argument("--sources", help="SOURCE.xlsx - the client's own supply "
+                                      "record, read for mill town names")
+    ap.add_argument("--aliases",
+                    default="./data/registry/supplier_aliases.csv")
+    ap.add_argument("--radius-km", type=float, default=DEFAULT_RADIUS_KM)
+    ap.add_argument("--block-limit", type=int, default=0,
+                    help="cap on blocks per operator. 0 means no cap, which is "
+                         "the default - a cap silently under-declares")
+    ap.add_argument("--out", default="catchment_out")
+    args = ap.parse_args()
+
+    print(ATTRIBUTION + "\n")
+    sources = read_sources(args.register)
+    mills = read_mills(args.mills) if args.mills else {}
+    identifiers = {}
+    if args.sources:
+        # A path that does not exist used to return an empty dict and carry on,
+        # so the town route silently never fired and the run looked like a
+        # result. Fail here instead.
+        if not os.path.isfile(args.sources):
+            sys.exit("--sources: no such file\n  {}\n\nThis is the client's "
+                     "supply record, SOURCE.xlsx. The mill town names are read "
+                     "from it, and without it every supplier that would resolve "
+                     "on a town is reported as having no catchment."
+                     .format(args.sources))
+        identifiers = read_source_identifiers(args.sources)
+        if not identifiers:
+            sys.exit("--sources: read {} but found no SUPPID column.\n"
+                     "Expected the client's supply record."
+                     .format(os.path.basename(args.sources)))
+        print("{} supplier code(s) with source identifiers to read mill towns "
+              "from".format(len(identifiers)))
+    else:
+        print("no --sources given: the mill town route is off, and suppliers "
+              "that would resolve on a town will be reported as gaps")
+
+    aliases = None
+    if os.path.isfile(args.aliases):
+        sys.path.insert(0, os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        from harp.aliases import AliasTable
+        aliases = AliasTable(args.aliases)
+        print("alias table: {}\n".format(aliases.summary().splitlines()[0]))
+
+    placed = sum(1 for m in mills.values()
+                 if str(m.get("latitude") or "").strip()
+                 and str(m.get("district_code") or "").strip())
+    print("{} supplier(s) in the register, {} of {} mill rows carry a usable "
+          "location\n".format(len(sources), placed, len(mills)))
+    collection, summary = build(sources, mills, aliases, args.radius_km,
+                                args.block_limit, identifiers)
+
+    os.makedirs(args.out, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    gj = os.path.join(args.out, "catchments_{}.geojson".format(stamp))
+    with open(gj, "w", encoding="utf-8") as fh:
+        json.dump(collection, fh)
+    csvp = os.path.join(args.out, "catchments_{}.csv".format(stamp))
+    if summary:
+        with open(csvp, "w", encoding="utf-8-sig", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(summary[0].keys()))
+            w.writeheader(); w.writerows(summary)
+
+    by: dict[str, list] = {}
+    for r in summary:
+        by.setdefault(r["method"], []).append(r)
+    print("\n" + "-" * 74)
+    print("{:<20}{:>10}{:>12}{:>14}".format("METHOD", "SUPPLIERS", "POLYGONS",
+                                            "JULY BDT"))
+    print("-" * 74)
+    for m in ("operator tenure", "named district", "mill buffer",
+              "US register", "already resolved", "none"):
+        rs = by.get(m) or []
+        if not rs:
+            continue
+        print("{:<20}{:>10}{:>12}{:>14,.0f}".format(
+            m, len(rs), sum(r["features"] for r in rs),
+            sum(float(r["bdt"] or 0) for r in rs)))
+    print("-" * 74)
+    print("{:<20}{:>10}{:>12}".format("TOTAL", len(summary),
+                                      len(collection["features"])))
+    gaps = by.get("none") or []
+    if gaps:
+        print("\n{} supplier(s) have no catchment at all:".format(len(gaps)))
+        for r in gaps:
+            print("  {:<34} {:>8,.0f} BDT".format(r["supplier"][:34],
+                                                  float(r["bdt"] or 0)))
+        print("  Recorded as a gap rather than invented. An unbounded answer "
+              "is better logged as no answer.")
+    print("\n  {}\n  {}".format(gj, csvp))
+
+
+if __name__ == "__main__":
+    main()
