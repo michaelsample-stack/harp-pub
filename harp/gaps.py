@@ -68,11 +68,19 @@ NEIGHBOURS = 5
 # may still be one operation; beyond that they are not.
 MAX_KM = 20.0
 
-# The same bracket a real date gets, so a filled feature reads like the rest.
-BRACKET_DAYS = 30
+# The bracket comes from the dates stage rather than being repeated here.
+#
+# The whole point of filling a gap is that an estimated date reads exactly
+# like an observed one. Two copies of the number, and two copies of the
+# function applying it, is a way for that to quietly stop being true - one
+# gets changed and the other does not, and nothing says so.
+from .dates import BRACKET_DAYS, bracket          # noqa: E402
 
-# Below this share a species is noise rather than composition.
-MIN_SHARE = 5.0
+# Below this share a species is noise rather than composition. Taken from the
+# species stage for the same reason as the bracket: a mix estimated from
+# neighbours has to read like one read from the raster, and two copies of the
+# threshold is a way for that to stop being true.
+from .species import MIN_SHARE                    # noqa: E402
 
 
 def settings(cfg) -> dict:
@@ -159,15 +167,6 @@ def middle_date(dates: list) -> str:
         return ""
     days.sort()
     return date.fromordinal(days[len(days) // 2]).isoformat()
-
-
-def bracket(observed: str) -> tuple:
-    try:
-        d = date.fromisoformat(observed)
-    except ValueError:
-        return "", ""
-    return ((d - timedelta(days=BRACKET_DAYS)).isoformat(),
-            (d + timedelta(days=BRACKET_DAYS)).isoformat())
 
 
 def unbracket(start: str) -> str:

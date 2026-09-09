@@ -25,6 +25,7 @@ from . import (adapters, assemble, cache, config, detect, detection_api,
                areas as areas_stage,
                eudr_schema,
                gaps as gaps_stage,
+               supply as supply_stage,
                species as species_stage,
                library as library_stage,
                lots as lots_stage,
@@ -407,6 +408,49 @@ def _month_file(cfg, args) -> str:
     hits = sorted(glob.glob("{}/*/3-month/harvest-*.geojson".format(
         cfg.paths.outbox)))
     return hits[-1] if hits else ""
+
+
+def cmd_supply(cfg, args) -> int:
+    """What arrived in a month, and how much of it can be placed.
+
+    Reads the delivery record and the register and says nothing else - no
+    queries, no geometry. For deciding whether a month is worth running, and
+    for answering the question the client actually asks: how much of our
+    fibre can you locate.
+    """
+    import pandas as pd
+    from . import lots as lots_mod
+
+    drop = args.drop or cfg.paths.inbox
+    items = package.sort_package(drop)
+    supply_file = args.register or _first_path(items, "job_list")
+    delivery = args.deliveries or _first_path(items, "delivery_record")
+    if not supply_file or not delivery:
+        _log("needs both a supply source register and a delivery record.")
+        _log("  looked in {}".format(drop))
+        return 1
+
+    reg = pd.read_excel(supply_file, header=0, skiprows=[1])
+    reg = reg.drop(columns=[c for c in reg.columns if str(c).startswith("[#")],
+                   errors="ignore").to_dict("records")
+    loads = lots_mod.read_deliveries(delivery, log=lambda *_a: None)
+    plan, report = supply_stage.plan_month(loads, reg, args.month or "", cfg,
+                                           log=_log)
+
+    _log("")
+    _log("{:<32}{:<20}{:>10}{:>8}".format("source", "kind", "BDT", "loads"))
+    _log("-" * 72)
+    for e in plan[:20]:
+        _log("{:<32}{:<20}{:>10,.0f}{:>8}".format(
+            e["source_id"][:32], e["kind"], e["bdt"], e["loads"]))
+    if len(plan) > 20:
+        _log("... and {} more".format(len(plan) - 20))
+    return 0
+
+
+def _first_path(items: dict, kind: str) -> str:
+    got = items.get(kind) or []
+    return getattr(got[0], "path", "") if got else ""
 
 
 def cmd_gaps(cfg, args) -> int:
@@ -864,9 +908,20 @@ def cmd_lot(cfg, args) -> int:
         feats = []
         for m in sorted(w.months):
             for f in shelf.get(m, []):
-                sup = (f.get("properties") or {}).get("harp_supplier_code") \
-                    or (f.get("properties") or {}).get("harp_supplier")
-                if sup in w.suppliers:
+                props = f.get("properties") or {}
+                sup = props.get("harp_supplier_code") \
+                    or props.get("harp_supplier")
+                # By source first. A supplier can deliver from several and
+                # only some of them fed this lot; selecting by supplier pulls
+                # in ground that had nothing to do with it. Falls back to the
+                # supplier for a month built before the source id was kept.
+                sid = str(props.get("harp_source_id") or "").strip()
+                if sid and w.sources:
+                    if sid not in w.sources:
+                        continue
+                elif sup not in w.suppliers:
+                    continue
+                if True:
                     g = {"type": "Feature", "geometry": f.get("geometry"),
                          "properties": {**(f.get("properties") or {}),
                                         "harp_lot": w.lot.lot_id,
@@ -1469,6 +1524,15 @@ search areas nobody can declare.
     en.add_argument("--search", metavar="GLOB")
     en.add_argument("--harvest", metavar="GLOB")
     en.set_defaults(fn=cmd_enrich)
+
+    sp = sub.add_parser("supply",
+                        help="what arrived in a month, and how much of it "
+                             "can be placed")
+    sp.add_argument("--drop", metavar="FOLDER")
+    sp.add_argument("--register", metavar="XLSX")
+    sp.add_argument("--deliveries", metavar="XLSX")
+    sp.add_argument("--month", help="YYYY-MM, for the heading only")
+    sp.set_defaults(fn=cmd_supply)
 
     gp = sub.add_parser("gaps",
                         help="estimate what the services could not answer")

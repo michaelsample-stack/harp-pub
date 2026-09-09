@@ -61,6 +61,7 @@ or:
 | `harp library` | Review staged and approved monthly datasets |
 | `harp lot <lot list>` | Resolve production lots back to contributing deliveries and harvest areas |
 | `harp areas` | Manage manually supplied operating and search areas |
+| `harp supply` | What arrived in a month, and how much of it can be placed |
 | `harp species` | Species on an existing month, without running everything else |
 | `harp gaps` | Estimate what the services could not answer |
 | `harp deliver` | The four EUDR fields and nothing else, for sending out |
@@ -194,6 +195,34 @@ resolve, and what has been flagged and carried forward anyway.
 
 This is the last point at which the shape of a month can be reviewed before the
 numbers change.
+
+### 1b. What arrived
+
+The month's work comes from the delivery record, not the supply register. The
+register lists everything the client might buy from; most of it did not
+deliver this month, and a good deal of it arrives back later under a
+different source entirely.
+
+Each delivered source is sorted by what kind of arrival it is - a sawmill's
+residual chips, the client's own logs chipped out under toll, their own
+tenure, or their own material moving. Roughly 71% of a month by mass is
+residual chips, which carry no timber mark and are bounded at district level.
+
+`harp supply` reports this without making a query.
+
+### 3b. Supplier declarations
+
+A supplier telling us where their wood came from, whatever shape it arrives
+in. One exports GeoJSON with the boundary in it; another prints a table of
+Washington permit numbers and scans it.
+
+A declaration carrying geometry is taken at their word. One carrying
+identifiers is resolved in a public register - a Forest Practices permit
+gives the approved harvest units under it, and detection narrows them to the
+month.
+
+A scan is read by OCR, and nothing about it has to be trusted: a permit that
+misreads will not resolve, and one that resolves is right.
 
 ### 7b. Harvest dates
 
@@ -373,6 +402,21 @@ Public data sources used by HARP include:
 
 ---
 
+## When a register is unavailable
+
+The tenure register is published twice - an ArcGIS REST service and a WFS
+endpoint on a different host - and they return identical records. REST is
+tried first; WFS is tried when REST fails outright.
+
+Lookups are cached between runs, a week for a hit and two days for a miss, so
+a run that gets partway before something stops answering keeps what it got and
+a re-run asks only for the rest. A service error is never cached: that would
+make an outage permanent.
+
+**An outage never reads as "no such record".** That distinction is the one
+that matters - a blip on the first rung once demoted a cut block to a district
+envelope, which is a wrong answer wearing the shape of a right one.
+
 ## Reference data
 
 Four files ship inside the package and are used unless something else is
@@ -484,11 +528,11 @@ its state so that a file moved out of context still explains itself.
 
 ## Documentation
 
-`docs/HARP_Design_v0_9_0.md`
+`docs/HARP_Design_v1_0_0.md`
 
 Detailed description of the pipeline, resolution methods, precision tiers, and processing workflow.
 
-`docs/HPA1_Decisions_Log_v1_4.md`
+`docs/HPA1_Decisions_Log_v1_5.md`
 
 Record of significant design decisions, including the date, rationale, and any later reversals.
 

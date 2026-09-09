@@ -103,22 +103,3 @@ def load(name_or_path: str, repo_root: Path | None = None) -> Config:
     )
 
 
-def from_environment() -> Config:
-    """Used by the Cloud Function shim.
-
-    Reads HARP_CONFIG, or derives one from the GCP project id following the
-    ngis-{client}-tms-{env}-{region} convention.
-    """
-    explicit = os.environ.get("HARP_CONFIG")
-    if explicit:
-        return load(explicit)
-
-    project = os.environ.get("GCP_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT")
-    if not project:
-        raise RuntimeError("Set HARP_CONFIG, or run where GOOGLE_CLOUD_PROJECT is set.")
-
-    parts = project.split("-")
-    if len(parts) >= 4 and parts[0] == "ngis":
-        return load(f"{parts[1]}-{parts[3]}")
-
-    raise RuntimeError(f"Cannot derive a config from project id '{project}'.")

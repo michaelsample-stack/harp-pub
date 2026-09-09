@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import csv
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 
 COLUMNS = ["supplier", "client_number", "client_name", "state", "decided_by",

@@ -29,6 +29,7 @@ future PLANNED_HARVEST_DATE. `completion_predicate()` holds our definition of
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -41,6 +42,19 @@ DISTRICTS = ROOT + "/748/query"
 
 PAGE = 1000
 TIMEOUT = 180
+
+# ── the same register, a second door ────────────────────────────────────────
+#
+# The ArcGIS REST service went down for a day and took every run with it. The
+# same feature class is published as WFS on a different host, and it answered
+# throughout: identical fields, identical records - GR2106 gives A94731,
+# BLK227 and CAPE MUDGE FORESTRY LTD. either way.
+#
+# So a run no longer depends on one server being up. REST is tried first
+# because it pages better and is what the rest of this module assumes; WFS is
+# tried when REST fails outright.
+WFS = "https://openmaps.gov.bc.ca/geo/pub/wfs"
+WFS_LAYER = "pub:WHSE_FOREST_TENURE.FTEN_CUT_BLOCK_POLY_SVW"
 
 # A request that fails is tried again before being believed.
 #
@@ -250,15 +264,24 @@ def features(where: str, log=print) -> list[dict]:
     out, cursor, page_no = [], None, 0
     while True:
         w = where if cursor is None else f"({where}) AND OBJECTID > {cursor}"
-        data = _post(BLOCKS, {
-            "where": w,
-            "outFields": "*",
-            "returnGeometry": "true",
-            "outSR": 4326,
-            "orderByFields": "OBJECTID",
-            "resultRecordCount": PAGE,
-            "f": "geojson",
-        })
+        try:
+            data = _post(BLOCKS, {
+                "where": w,
+                "outFields": "*",
+                "returnGeometry": "true",
+                "outSR": 4326,
+                "orderByFields": "OBJECTID",
+                "resultRecordCount": PAGE,
+                "f": "geojson",
+            })
+        except Exception as exc:
+            if page_no:
+                # Partway through paging. Half a set of blocks is worse than
+                # none, so this is a failure rather than a short answer.
+                raise
+            log("    REST is not answering ({}), trying WFS".format(
+                str(exc).splitlines()[0][:70]))
+            return wfs_query(where, geometry=True, log=log)
         feats = data.get("features", [])
         if not feats:
             break
@@ -403,6 +426,53 @@ def sql_quote(value: Any) -> str:
     return str(value).replace("'", "''")
 
 
+def _cql(where: str) -> str:
+    """An ArcGIS where clause as CQL.
+
+    The two are close enough for what this module builds - equality, IN, and
+    AND - so nothing is translated. What differs is that CQL has no square
+    brackets and no schema prefix, neither of which appear here.
+    """
+    return where
+
+
+def wfs_query(where: str, geometry: bool = False, log=None) -> list[dict]:
+    """The same query against the WFS endpoint.
+
+    Returns GeoJSON features. Geometry comes back in BC Albers unless asked
+    for otherwise, so the CRS is named explicitly - a run that quietly got
+    metres where it expected degrees would place every block off the coast of
+    Africa.
+    """
+    params = {
+        "service": "WFS", "version": "2.0.0", "request": "GetFeature",
+        "typeName": WFS_LAYER, "outputFormat": "application/json",
+        "srsName": "EPSG:4326", "count": PAGE,
+        "CQL_FILTER": _cql(where),
+    }
+    out, start = [], 0
+    while True:
+        params["startIndex"] = start
+        r = requests.get(WFS, params=params, timeout=TIMEOUT)
+        if not r.ok:
+            raise ServiceError("WFS returned HTTP {}".format(r.status_code))
+        try:
+            body = r.json()
+        except ValueError:
+            msg = " ".join(re.sub(r"<[^>]+>", " ", r.text).split())[:200]
+            raise ServiceError("WFS did not return JSON: {}".format(msg))
+        feats = body.get("features") or []
+        out.extend(feats)
+        if len(feats) < PAGE:
+            break
+        start += PAGE
+        if start > 20000:
+            break
+    if log:
+        log("    {} feature(s) from WFS".format(len(out)))
+    return out
+
+
 def attributes(where: str, fields: str = LOOKUP_FIELDS,
                limit: int = PAGE, retries: int = 3) -> list[dict]:
     """Attributes only, no geometry.
@@ -426,7 +496,18 @@ def attributes(where: str, fields: str = LOOKUP_FIELDS,
             last = exc
             if attempt < retries - 1:
                 time.sleep(0.5 * (2 ** attempt))
-    raise ServiceError("query failed after {} attempts: {}".format(retries, last))
+    # REST is unreachable. The same records are on WFS, so ask there before
+    # concluding the register has nothing - an outage that reads as "no such
+    # record" demotes a cut block to a district envelope, which is a wrong
+    # answer that looks like a right one.
+    try:
+        feats = wfs_query(where, geometry=False)
+        return [f.get("properties") or {} for f in feats]
+    except Exception as wfs_exc:
+        raise ServiceError(
+            "REST failed after {} attempts ({}), and WFS also failed "
+            "({})".format(retries, str(last).splitlines()[0][:80],
+                          str(wfs_exc).splitlines()[0][:80]))
 
 
 def attributes_safe(where: str, **kw) -> tuple[list[dict], str]:
@@ -882,6 +963,7 @@ def ownership_values(field: str, limit: int = 200) -> list[str]:
 
 def district_geometry(district_code: str) -> dict | None:
     """The polygon for one NR district, by its code."""
+    failures = 0
     for field in ("DISTRICT_CODE", "ORG_UNIT", "ORG_UNIT_CODE"):
         try:
             data = _post(DISTRICTS_LAYER + "/query", {
@@ -889,10 +971,21 @@ def district_geometry(district_code: str) -> dict | None:
                 "outFields": "DISTRICT_NAME", "returnGeometry": "true",
                 "outSR": 4326, "resultRecordCount": 5, "f": "geojson"})
         except Exception:
+            # Which field carries the code varies, so a failure here is
+            # usually the wrong field rather than a broken service - unless
+            # every one of them fails, which is checked below.
+            failures += 1
             continue
         feats = data.get("features") or []
         if feats:
             return feats[0]
+    if failures == 3:
+        # Every field failed, so nothing was actually asked. Returning None
+        # here would say the district does not exist, and a search area built
+        # on that answer is a district-shaped hole rather than a district.
+        raise ServiceError(
+            "the district layer did not answer for {} on any field - this is "
+            "an outage, not a missing district".format(district_code))
     return None
 
 

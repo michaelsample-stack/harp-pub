@@ -18,7 +18,6 @@ the shape of other people's data is how you build the wrong thing.
 
 from __future__ import annotations
 
-from typing import Any
 
 
 def read(path: str) -> list[dict]:

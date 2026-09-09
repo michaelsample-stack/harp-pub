@@ -61,8 +61,7 @@ from __future__ import annotations
 
 import json
 import os
-import re
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import date
 
 # A producer's own name for itself, where the file gives a domain.

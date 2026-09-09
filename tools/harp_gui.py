@@ -26,7 +26,6 @@ import subprocess
 import sys
 import threading
 import traceback
-from collections import Counter
 from datetime import date, datetime, timedelta
 
 import tkinter as tk
@@ -35,13 +34,12 @@ from tkinter import filedialog, messagebox, ttk
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import harp                                                    # noqa: E402
-from harp import (assemble, catchments, config, detect as detect_stage,  # noqa: E402
-                  detection_api, io, library as library_stage,
-                  eudr_schema, lots as lots_stage, mills as mills_mod,
-                  reference as reference_mod,
-                  package,
-                  run as run_stage)
-from harp.resolution import Tier                               # noqa: E402
+from harp import (catchments, config, declarations,            # noqa: E402
+                  detection_api, io,
+                  eudr_schema, library as library_stage,
+                  lots as lots_stage, mills as mills_mod, package,
+                  reference as reference_mod, run as run_stage,
+                  supply as supply_stage)
 
 MUTED = "#5F6368"
 GOOD = "#137333"
@@ -58,9 +56,10 @@ TIER_COLOUR = {"P1a": GOOD, "P1b": WARN, "P1c": GOOD, "P1d": GOOD,
 # than leaving them off and adding them silently later.
 STAGES = [
     ("sort",     "Sort",         "files read by their columns"),
+    ("supply",   "What arrived", "the month's deliveries, by mass"),
     ("resolve",  "Resolve",      "every source down the ladder"),
     ("search",   "Search areas", "for whatever did not resolve"),
-    ("declared", "Declared",     "producer's own areas"),
+    ("declared", "Declared",     "what suppliers told us themselves"),
     ("split",    "Split",        "harvest, tenure, search"),
     ("union",    "Union",        "one polygon to submit"),
     ("detect",   "Detect",       "submit and wait"),
@@ -287,7 +286,8 @@ class App(tk.Tk):
         cards.pack(fill="x", padx=10, pady=10)
         self.cards = {}
         for key, label in (("sources", "Sources"), ("detections", "Detections"),
-                           ("harvest", "Harvest areas"), ("dated", "Dated"),
+                           ("harvest", "Harvest areas"), ("placed", "Placed"),
+                           ("dated", "Dated"),
                            ("estimated", "Estimated"),
                            ("direct", "Direct"), ("declared", "Declared"),
                            ("indirect", "Indirect"), ("inferred", "Inferred")):
@@ -344,6 +344,22 @@ class App(tk.Tk):
         ttk.Button(r, text="Open",
                    command=lambda: self.open_dir(
                        self.drop_dir.get().strip())).pack(side="left")
+
+        g0 = ttk.LabelFrame(parent, text="What arrived")
+        g0.pack(fill="x", **pad)
+        self.supply_note = ttk.Label(
+            g0, text="pick a folder with a delivery record and a supply "
+                     "source register", foreground=MUTED, wraplength=1160,
+            justify="left")
+        self.supply_note.pack(anchor="w", padx=10, pady=(8, 4))
+        self.supply_tree = ttk.Treeview(
+            g0, columns=("k", "b", "p", "w"), show="headings", height=5)
+        for c, h, w in (("k", "Kind", 200), ("b", "BDT", 110),
+                        ("p", "Share", 80), ("w", "What it means", 700)):
+            self.supply_tree.heading(c, text=h)
+            self.supply_tree.column(c, width=w, anchor="w")
+        self.supply_tree.pack(fill="x", padx=10, pady=(0, 10))
+        self.supply_tree.tag_configure("ceiling", foreground=WARN)
 
         g = ttk.LabelFrame(parent, text="What is in it")
         g.pack(fill="both", expand=True, **pad)
@@ -685,6 +701,22 @@ class App(tk.Tk):
                 found.append(label)
                 if not var.get().strip():
                     var.set(path)
+        # What arrived, by mass. Reading it costs nothing - no queries, no
+        # geometry - and it is the number that decides whether a month is
+        # worth running: a month that is three-quarters sawmill residual
+        # cannot be improved by chasing identifiers.
+        self._read_supply(items)
+        # A declaration is recognised by its shape, and a scanned PDF is not
+        # something the package sorter knows about - it would list one as
+        # unrecognised, which reads as a problem when it is the strongest
+        # evidence in the drop.
+        extra_decls = []
+        for kind in ("unknown", "supplier_geodata"):
+            for it in items.get(kind) or []:
+                path = getattr(it, "path", "")
+                if path and declarations.looks_like(path):
+                    extra_decls.append((path, declarations.looks_like(path)))
+
         # The table, best-known first so a reader sees the essentials before
         # the oddities.
         self.drop_tree.delete(*self.drop_tree.get_children())
@@ -695,7 +727,7 @@ class App(tk.Tk):
             "job_list": "supply list",
             "delivery_record": "deliveries",
             "private_marks": "timber marks",
-            "producer_geodata": "declared areas",
+            "producer_geodata": "supplier declarations",
             "lot_list": "lot list",
             "supplier_register": "supplier register",
             "mill_locations": "mill locations",
@@ -705,14 +737,27 @@ class App(tk.Tk):
         for kind in ORDER + [k for k in sorted(items) if k not in ORDER]:
             for it in items.get(kind) or []:
                 note = (getattr(it, "note", "") or "")
-                if kind == "unknown":
+                path = getattr(it, "path", "")
+                label = LABEL.get(kind, kind)
+                tag = kind if kind == "unknown" else ""
+                decl = dict(extra_decls).get(path, "")
+                if decl:
+                    # It is a declaration, whatever the sorter made of it.
+                    # A supplier's own account of where their wood came from
+                    # is the strongest evidence in a drop and must not sit in
+                    # the table looking like something unwanted.
+                    label = "supplier declaration"
+                    tag = ""
+                    note = ("boundaries, taken at their word"
+                            if decl == "geometry"
+                            else "permit numbers, resolved in the register")
+                elif kind == "unknown":
                     # Not an error. A file nothing matched is a finding, and
                     # sometimes it is the client sending something new.
                     note = "no signature matched — a finding, not an error"
                 self.drop_tree.insert(
-                    "", "end", tags=(kind,) if kind == "unknown" else (),
-                    values=(LABEL.get(kind, kind),
-                            os.path.basename(getattr(it, "path", "")),
+                    "", "end", tags=(tag,) if tag else (),
+                    values=(label, os.path.basename(path),
                             "{:,}".format(getattr(it, "rows", 0) or 0)
                             if getattr(it, "rows", 0) else "",
                             note[:120]))
@@ -766,6 +811,51 @@ class App(tk.Tk):
         self._ask(self.register_file, "Supplier register",
                   filetypes=[("Register", "*.csv *.xlsx"), ("All", "*.*")])
         self._check_register()
+
+    def _read_supply(self, items):
+        """The month's arrivals by mass, from the drop alone."""
+        self.supply_tree.delete(*self.supply_tree.get_children())
+        reg = run_stage._first(items, "job_list")
+        deliveries = run_stage._first(items, "delivery_record")
+        if not (reg and deliveries):
+            self.supply_note.config(
+                text="needs both a supply source register and a delivery "
+                     "record to say what arrived", foreground=MUTED)
+            return
+        try:
+            import pandas as pd
+            rows = pd.read_excel(reg, header=0, skiprows=[1])
+            rows = rows.drop(
+                columns=[c for c in rows.columns if str(c).startswith("[#")],
+                errors="ignore").to_dict("records")
+            loads = lots_stage.read_deliveries(deliveries,
+                                               log=lambda *_a: None)
+            plan, report = supply_stage.plan_month(
+                loads, rows, "", self.cfg, log=lambda *_a: None)
+        except Exception as exc:
+            self.supply_note.config(
+                text="could not read it: {}".format(str(exc)[:110]),
+                foreground=BAD)
+            return
+
+        total = report.get("bdt", 0) or 1
+        self.supply_note.config(
+            text="{} source(s) delivered {:,.0f} BDT. This is read from the "
+                 "drop alone \u2014 no queries, no geometry.".format(
+                     report.get("sources", 0), total),
+            foreground=MUTED)
+        for kind, bdt in sorted(report.get("by_kind", {}).items(),
+                                key=lambda kv: -kv[1]):
+            share = bdt / total
+            self.supply_tree.insert(
+                "", "end",
+                # Amber on the one that cannot be improved, so it reads as a
+                # ceiling rather than as work outstanding.
+                tags=("ceiling",) if kind == supply_stage.MERCHANT
+                and share > 0.25 else (),
+                values=(kind, "{:,.0f}".format(bdt),
+                        "{:.0f}%".format(100 * share),
+                        supply_stage._explain(kind)))
 
     def _check_register(self):
         """Say straight away whether this file is a register.
@@ -1095,6 +1185,17 @@ class App(tk.Tk):
             total = out.get("month_features", 0)
             self.cards["dated"].config(
                 text="{:,}".format(dated) if dated else "—")
+            # How much of the fibre is bounded better than a search area.
+            # The number that decides whether a month is worth anything, and
+            # it is in tonnes rather than features because that is the
+            # question the client asks.
+            sup = out.get("supply") or {}
+            shares = sup.get("shares") or {}
+            placed = 1.0 - shares.get(supply_stage.MERCHANT, 0.0) \
+                - shares.get(supply_stage.UNKNOWN, 0.0)
+            self.cards["placed"].config(
+                text="{:.0f}%".format(100 * placed) if sup else "—")
+
             est = out.get("estimated", 0)
             over = out.get("estimates_over_threshold")
             # Amber only where too much of the month was estimated. The

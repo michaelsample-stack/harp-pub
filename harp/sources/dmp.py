@@ -72,7 +72,6 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any
 
 # A polygon larger than this is a regional area rather than a cutblock. A BC
 # coastal cutblock runs from under a hectare to a couple of hundred; the

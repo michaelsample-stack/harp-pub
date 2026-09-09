@@ -41,7 +41,6 @@ Recommended findings never trigger cleaning. They are reported and carried.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 from . import adapters
 

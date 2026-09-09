@@ -44,6 +44,13 @@ def test_size_class_matches_eudr_article_9():
 
 
 def test_normalised_row_carries_provenance():
+    """The raw record is kept as a sidecar, not inline on every row.
+
+    Carrying it inline added roughly a third again to a file that goes to
+    TraceMark for data TraceMark does not read, so it moved to
+    `provenance_rows` keyed on sce_id. `keep_source=True` is the caller that
+    wants a single self-contained artefact - which is what this checks.
+    """
     feature = {
         "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [0, 1], [1, 1], [0, 0]]]},
         "properties": {"TIMBER_MARK": "A83888", "CUT_BLOCK_SKEY": 12345,
@@ -52,8 +59,11 @@ def test_normalised_row_carries_provenance():
     row = normalise.from_ften(feature, source="NFP")
     assert row["eudr_sub_type"] == "database_polygon"
     assert row["sce_id"] == "FTEN-A83888-12345"
-    assert row["_source"]["TIMBER_MARK"] == "A83888"
+    assert "_source" not in row, "the raw record is a sidecar, not inline"
     assert normalise.check(row) == []
+
+    kept = normalise.from_ften(feature, source="NFP", keep_source=True)
+    assert kept["_source"]["TIMBER_MARK"] == "A83888"
 
 
 def test_missing_geometry_is_caught():

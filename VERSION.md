@@ -4,11 +4,161 @@ The version lives in `pyproject.toml` and `harp/__init__.py`. This file records
 what changed and why; it does not assert a version of its own, because a third
 place to update is a third place to forget.
 
-Documents version separately. `docs/HARP_Design_v0_9_0.md` and
-`docs/HPA1_Decisions_Log_v1_4.md` carry their own numbers and are not expected
+Documents version separately. `docs/HARP_Design_v1_0_0.md` and
+`docs/HPA1_Decisions_Log_v1_5.md` carry their own numbers and are not expected
 to match the package.
 
 ---
+
+## 0.30.x — documentation brought up to date
+
+The design document reaches 1.0.0 and gains two sections: what arrived and
+what kind it is, and supplier declarations. The decisions log reaches 1.5 with
+the three decisions of the last two days and six corrections. The README gains
+the delivery-driven month, declarations, `harp supply`, and what happens when
+a register is unavailable.
+
+No code changed.
+
+## 0.29.x — what a read through the whole codebase turned up
+
+**The EUDR lamp never lit.** Declared in the desktop window, the stage ran,
+and nothing signalled it - so it sat grey through every run, reading as a
+stage that had not happened.
+
+**The toll-chipper pool swallowed its failures.** Any exception per record
+was caught and skipped with no count, so a register that stopped answering
+could take every pooled identifier with it and the run would report "0 added"
+without a reason. The main resolve loop already counted and named its
+failures; this path had not been given the same treatment.
+
+**Three constants had two copies each.** `BRACKET_DAYS` in both the dates and
+gaps stages, along with two different implementations of `bracket()`;
+`MIN_SHARE` in gaps and species; `POINT_AREA_HA` in normalise and species.
+
+That matters more than tidiness. The point of filling a gap is that an
+estimated value reads exactly like an observed one - and two copies of the
+number applying it is how that quietly stops being true. Each now has one
+definition and the others import it.
+
+**Features dropped from the union in silence** are now counted. A geometry
+that cannot be read is a smaller submission than intended, and a smaller
+submission finds less, which looks like a quiet month rather than a fault.
+The same for detections that cannot be read - each is harvest that will be
+attributed to nobody.
+
+**And the district lookup could not tell an outage from a missing district.**
+It tries three field names because the code lives in a different one
+depending on the layer; if all three fail nothing was actually asked, and
+returning "no such district" would build a search area on a hole. It raises
+now.
+
+**The completion rule stays out of `harp run`, and the config says why.** It
+requires disturbance start and end dates that the register barely populates -
+filtering 3,339 blocks to since-2024 left fifteen - so applying it to a month
+would drop most of it. Detection answers the same question with evidence
+rather than a null field.
+
+## 0.29.x — a second door to the tenure register
+
+The ArcGIS REST service went down for a day and took every run with it. The
+same feature class is published as WFS on a different host, and it answered
+throughout - identical fields, identical records. `GR2106` gives `A94731`,
+`BLK227` and Cape Mudge Forestry either way.
+
+REST is tried first; WFS is tried when REST fails outright. A run no longer
+depends on one server being up.
+
+**The distinction that matters is preserved.** An outage must never read as
+"no such record" - a blip on the first rung once demoted a cut block to a
+district envelope, which is a wrong answer wearing the shape of a right one.
+So the fallback is tried before concluding anything, and if both doors are
+shut the run says so.
+
+## 0.29.x — supplier declarations, whatever shape they arrive in
+
+Two suppliers declare where their wood came from and neither does it the same
+way. Mosaic exports GeoJSON with the boundary in it. Willis prints a table of
+Washington permit numbers and scans it.
+
+**Both are the same act**, so there is now one roof - `harp/declarations.py` -
+and a new supplier's format is a reader underneath it rather than a new path
+through the pipeline.
+
+| | | |
+|---|---|---|
+| geometry | taken at their word | P1d, finished |
+| identifiers | resolved in a public register | P2a, searched |
+
+**A scan is read by OCR, and nothing about it has to be trusted.** A permit
+that misreads will not resolve in the register; one that resolves is right.
+Read by word position rather than as text, because tesseract reads a printed
+table column by column otherwise. All twenty-one rows of one real declaration
+came out clean.
+
+**`harp/sources/fpars.py`** resolves a Washington Forest Practices permit to
+the units it covers. Eighteen of twenty-one permits on one declaration
+resolved, to fifty-four units, every one carrying an area.
+
+**One layer, not eight.** The service publishes the same features under eight
+filters, and querying all of them returned eighteen permits as two hundred and
+eighteen rows. `FPA - All Harvest by Classification` carries every polygon the
+others do. `Not Digitized` is not read at all - it records applications the
+state has no boundary for, which is worth knowing and is not a harvest area.
+
+**Why P2a rather than P1a.** A permit covers several approved units and the
+supplier named the permit, not which unit fed a delivery. Real register
+geometry, more than they cut for us, narrowed by detection - which is what
+P2a means.
+
+## 0.28.x — the month is what arrived
+
+**The pipeline used to take its work from the supply source register.** A July
+run resolved 217 identifiers to declare a month in which 41 sources delivered.
+The register is a master list of everything the client might buy from; 159 of
+its 279 rows are log purchases that arrive back later as chips under an
+entirely different source.
+
+**The month now comes from the delivery record**, and the register is a lookup
+for what each delivered source is. Without a delivery record the old
+behaviour stands, and says so.
+
+### Four kinds of arrival
+
+`ORIGIN_TYPE` says which, and by mass rather than by count they are not
+close to equal. Across 2026 to date:
+
+| | | |
+|---|---|---|
+| merchant residual | 304,547 BDT | 71% |
+| toll chipped | 121,092 BDT | 28% |
+| own yard | 4,892 BDT | 1% |
+| trade | 103 BDT | 0% |
+
+**Seventy-one percent is residual chips bought from a sawmill.** No timber
+mark exists to be asked for - the logs were the sawmill's own purchase. A
+search area is the honest ceiling, and a run now says so in tonnes rather
+than leaving it to be inferred from a feature count.
+
+**Twenty-eight percent was chipped under toll from the client's own logs.**
+Those marks are already in the register: the register records where each log
+purchase was sent, and a chip receipt from DCT or Mid Island now resolves to
+the pool of blocks routed there as a P2a search area, narrowed by detection
+to the window. The same treatment a supplier's own tenure already gets.
+
+**Own yard material is no longer resolved at all.** It arrived, but it did not
+come from a forest this month, and declaring it double counted the wood that
+did.
+
+### The join that was being thrown away
+
+`harp_source_id` was set at assembly and dropped by the schema filter one step
+later. It is kept now, which means a lot walkback selects geometry by the
+deliveries it identified rather than by supplier - a supplier can deliver from
+several sources and only some of them fed a given lot.
+
+`harp supply` reports what arrived and how much of it can be placed, without
+making a single query.
 
 ## 0.27.x — the reference data ships with the package
 
@@ -261,7 +411,7 @@ makes the declaration.
 ## 0.12.x and earlier
 
 Catchments, the supplier alias table, the US routes, and the BC resolver ladder.
-See `docs/HPA1_Decisions_Log_v1_4.md` for the reasoning behind each, with dates
+See `docs/HPA1_Decisions_Log_v1_5.md` for the reasoning behind each, with dates
 and reversals.
 
 ---

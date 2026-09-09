@@ -102,13 +102,6 @@ def validate(collection: dict, country_iso2: str | None = None,
     return validate_file(collection, country_iso2=country_iso2, **options)
 
 
-def required_only(findings: list[dict]) -> list[dict]:
-    """The findings that actually block. Recommended ones are reported and
-    carried, not cleaned for."""
-    return [f for f in findings
-            if str(f.get("error_type", "")).lower() == "required"]
-
-
 # ───────────────────────────── ngis-eo ─────────────────────────────────────
 
 def detect_point(lat: float, lon: float, start: str, end: str,

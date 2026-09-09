@@ -23,7 +23,6 @@ TWO OPEN QUESTIONS, both for the TraceMark team, both five-minute answers:
 
 from __future__ import annotations
 
-from typing import Any
 
 from .resolution import Resolution, Tier
 
@@ -262,24 +261,6 @@ def _dissolved_row(res: Resolution, sce_type: str, sub_type: str) -> dict | None
                      "GeoJSON."),
         },
     }
-
-
-def why_no_row(res: Resolution) -> str:
-    """Why this resolution produced no sce_base row.
-
-    Two very different absences share one outcome and should not be reported
-    as one number. A search area is working as intended and is waiting on
-    detection; an unresolved source is a question for the client.
-    """
-    if TIER_TO_SUB_TYPE.get(res.tier) is not None:
-        return ""
-    if res.tier in SEARCH_TIERS:
-        return ("a place to look, not a harvest - awaiting detection")
-    return "nothing resolved - a client question"
-
-
-def from_supplier_geodata(feature: dict, source: str, sce_type: str = "CutBlock") -> dict:
-    raise NotImplementedError("Pending a real supplier file to design against.")
 
 
 def from_detection(feature: dict, source: str, sce_type: str = "CutBlock") -> dict:

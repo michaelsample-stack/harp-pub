@@ -166,12 +166,10 @@ def summarise(suppliers: list[Supplier]) -> dict[str, int]:
 # and alphanumeric marks all live in that one field. R2 to R4 have never fired
 # and are kept as cheap insurance.
 
-from . import identify as _identify                       # noqa: E402
 from .identify import Record, shapes as _shapes          # noqa: E402
 from .resolution import Klass, Resolution, Tier          # noqa: E402
 from .sources import ften as _ften                       # noqa: E402
 from .sources import hbs as _hbs                          # noqa: E402
-from .sources import private_marks as _pm                 # noqa: E402
 
 # What a class means when the ladder has been exhausted. These are the next
 # step for a source that produced no geometry - not a reason to skip it.

@@ -56,9 +56,8 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import date, datetime
 
 # Kinds that need looking at. Harvest areas resolved from an identifier do not
@@ -170,7 +169,7 @@ def union(features: list[dict], log=print) -> dict:
     from shapely.geometry import mapping, shape
     from shapely.ops import unary_union
 
-    shapes = []
+    shapes, unreadable, empty = [], 0, 0
     for f in features:
         try:
             s = shape(f["geometry"])
@@ -178,8 +177,16 @@ def union(features: list[dict], log=print) -> dict:
                 s = s.buffer(0)
             if not s.is_empty:
                 shapes.append(s)
+            else:
+                empty += 1
         except Exception:
-            continue
+            # Counted rather than dropped in silence. A feature that cannot
+            # be read is a smaller submission than intended, and a smaller
+            # submission finds less - which looks like a quiet month.
+            unreadable += 1
+    if unreadable or empty:
+        log("  {} feature(s) left out of the union: {} unreadable, {} "
+            "empty".format(unreadable + empty, unreadable, empty))
     if not shapes:
         raise RuntimeError("nothing to union")
 
@@ -239,16 +246,22 @@ def enrich(tenure: list[dict], catchments: list[dict], detections: list[dict],
     if not in_window:
         return [], [], {"detections": len(detections), "in_window": 0}
 
-    det_shapes = []
+    det_shapes, unreadable_dets = [], 0
     for d in in_window:
         try:
             s = shape(d["geometry"])
             if not s.is_valid:
                 s = s.buffer(0)
         except Exception:
+            # A detection we cannot read is harvest that will not be
+            # attributed to anybody.
+            unreadable_dets += 1
             continue
         if not s.is_empty:
             det_shapes.append((s, d))
+    if unreadable_dets:
+        log("  {} detection(s) could not be read and will not be attributed "
+            "to anybody".format(unreadable_dets))
 
     # Both inputs are search areas. The detection is what is kept; the area
     # only says whose it was and what else is known about it.

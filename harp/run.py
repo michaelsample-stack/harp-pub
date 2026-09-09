@@ -45,12 +45,13 @@ either a harvest area or a place to look for one.
 
 from __future__ import annotations
 
-import glob
 import os
 from collections import Counter
 from datetime import datetime
 
+from . import declarations
 from . import reference
+from . import supply as supply_stage
 from . import (assemble, catchments, dates as dates_stage,
                detect as detect_stage, detection_api, gaps as gaps_stage,
                species as species_stage,
@@ -79,6 +80,10 @@ SCHEMA = [
     "HarvestStartDate", "HarvestEndDate", "harp_harvest_basis",
     "harp_detected_first",
     "harp_producer_number", "harp_producer_source",
+    # The source a feature came from. Set at assembly and, until now, dropped
+    # here - which meant a lot walkback could ask the library for geometry by
+    # supplier but never by the delivery it had actually identified.
+    "harp_source_id",
     "harp_supplier", "harp_supplier_code", "harp_jurisdiction",
     "harp_geometry_kind", "harp_method", "harp_source_system",
     "harp_key", "harp_key_name",
@@ -712,12 +717,22 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
     lot_list = _first(sorted_items, "lot_list")
     if lot_list:
         say("  a lot list is here too - `harp lot` will use it")
+    # Anything a supplier declared, whatever shape it arrives in. Mosaic
+    # exports GeoJSON with the boundary in it; Willis prints a table of state
+    # permit numbers and scans it. Both are the same act and the reader sorts
+    # them out - a geometry declaration is finished, an identifier one is
+    # resolved against its register.
     declared_files = [getattr(i, "path", "")
                       for i in (sorted_items.get("producer_geodata") or [])
                       if getattr(i, "path", "")]
+    for kind in ("unknown", "supplier_geodata"):
+        for item in sorted_items.get(kind) or []:
+            path = getattr(item, "path", "")
+            if path and path not in declared_files \
+                    and declarations.looks_like(path):
+                declared_files.append(path)
     if declared_files:
-        say("  {} file(s) of producer-declared harvest areas".format(
-            len(declared_files)))
+        say("  {} supplier declaration(s)".format(len(declared_files)))
 
     marks_dir = private_marks_dir or (
         folder if sorted_items.get("private_marks") else "")
@@ -731,8 +746,59 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
     say("\n" + "=" * 66)
     say("2  RESOLVING")
     say("=" * 66)
-    records = [identify.identify(r) for r in identify.load(supply)]
-    say("{} source(s) from {}".format(len(records), os.path.basename(supply)))
+    # ---- what arrived, rather than what could have ------------------------
+    #
+    # The month's work comes from the delivery record. The register is a
+    # master list of everything the client might buy from - a July run used
+    # to resolve 217 identifiers to declare a month in which 41 sources
+    # delivered, and 159 of those identifiers are log purchases that arrive
+    # back later as chips under a different source entirely.
+    #
+    # Without a delivery record there is no way to know what arrived, so the
+    # old behaviour stands: resolve the register and say so.
+    all_records = [identify.identify(r) for r in identify.load(supply)]
+    plan, supply_report, pools = [], {}, {}
+    delivery_file = _delivery_file(sorted_items)
+    stage_cb("supply", "running")
+    if delivery_file:
+        try:
+            import pandas as _pd
+            reg = _pd.read_excel(supply, header=0, skiprows=[1])
+            reg = reg.drop(columns=[c for c in reg.columns
+                                    if str(c).startswith("[#")],
+                           errors="ignore").to_dict("records")
+            loads = lots_stage.read_deliveries(delivery_file,
+                                               log=lambda *_a: None)
+            plan, supply_report = supply_stage.plan_month(
+                loads, reg, month, cfg, log=say)
+            wanted, pools, no_id = supply_stage.to_records(plan, log=say)
+            stage_cb("supply", "done", "{:,.0f} BDT".format(
+                supply_report.get("bdt", 0)))
+            outcome["supply"] = supply_report
+            keep = {e["source_id"] for e in wanted}
+            records = [r for r in all_records
+                       if str(getattr(r, "source_id", "")).strip() in keep]
+            if not records:
+                say("")
+                say("  nothing in the register matched what was delivered - "
+                    "resolving the register instead")
+                records = all_records
+        except Exception as exc:
+            say("could not read the delivery record: {}".format(
+                str(exc).splitlines()[0][:140]))
+            say("  resolving the whole register instead")
+            records = all_records
+    else:
+        records = all_records
+        stage_cb("supply", "skipped", "no delivery record")
+        say("")
+        say("no delivery record in the drop, so the whole register is "
+            "resolved. That is everything the client might buy from rather "
+            "than what arrived.")
+
+    say("")
+    say("{} source(s) to resolve, of {} in {}".format(
+        len(records), len(all_records), os.path.basename(supply)))
     say("columns mapped: " + identify.describe_mapping())
     if unique:
         before = len(records)
@@ -856,6 +922,76 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
                 "more. Something answered differently, and it is worth "
                 "knowing what before this month goes anywhere."
                 .format(unresolved, previous, (jump - 1) * 100))
+
+    # ---- toll chipper pools ----------------------------------------------
+    #
+    # A chip receipt from a toll chipper is the client's own logs coming back.
+    # The marks are already in the register - what is unknown is which of them
+    # fed which shipment. So the whole pool routed to that chipper becomes a
+    # search area of real registered blocks, and detection narrows it to the
+    # window. The same treatment a supplier's own tenure already gets.
+    pool_records = []
+    if pools:
+        by_ident = {str(getattr(r, "identifier", "")).strip(): r
+                    for r in all_records}
+        for code, slot in pools.items():
+            for ident in slot["pool"]:
+                rec = by_ident.get(ident)
+                if rec is None or rec in records:
+                    continue
+                pool_records.append((code, slot, rec))
+        if pool_records:
+            say("")
+            say("resolving {} identifier(s) sent to {} toll chipper(s)".format(
+                len(pool_records), len(pools)))
+            pool_broke, pool_unresolved = [], 0
+            for n, (code, slot, rec) in enumerate(pool_records, 1):
+                try:
+                    res = router.resolve(rec, hbs_client=client,
+                                         fetch_geometry=fetch_geometry,
+                                         registry=registry, index=index)
+                except Exception as exc:
+                    # Counted, not swallowed. The main resolve loop already
+                    # reports its failures; this path did not, so a register
+                    # that stopped answering could take every pooled block
+                    # with it and the run would say "0 added" without a
+                    # reason.
+                    pool_broke.append((rec.identifier,
+                                       str(exc).splitlines()[0][:100]))
+                    continue
+                if not res.resolved:
+                    pool_unresolved += 1
+                    continue
+                # A pooled block is not a declared harvest: the shipment came
+                # from somewhere in the pool, not from all of it. P2a, the
+                # tier for an area attributable to a supplier, searched by
+                # detection like any other.
+                res.tier = Tier.P2A
+                res.note("in the pool of blocks sent to {} for chipping. "
+                         "Attributable to that chipper's deliveries, not to "
+                         "one of them.".format(code))
+                results.append(res)
+                if n % 25 == 0 or n == len(pool_records):
+                    stage_cb("resolve", "running",
+                             "pool {}/{}".format(n, len(pool_records)))
+            pooled_in = sum(1 for r in results
+                            if any("in the pool of blocks" in n
+                                   for n in getattr(r, "notes", [])))
+            say("  {} pooled block(s) resolved and added as search "
+                "areas".format(pooled_in))
+            if pool_unresolved:
+                say("  {} identifier(s) in the pool resolved to nothing"
+                    .format(pool_unresolved))
+            if pool_broke:
+                say("  {} raised while resolving:".format(len(pool_broke)))
+                for ident, why in pool_broke[:5]:
+                    say("    {:<20}{}".format(str(ident)[:20], why))
+                if len(pool_broke) > 5:
+                    say("    ... and {} more".format(len(pool_broke) - 5))
+                if len(pool_broke) > len(pool_records) / 2:
+                    say("  More than half the pool failed on a service call. "
+                        "The toll-chipped share of this month is not what it "
+                        "should be - re-run before shelving it.")
 
     if broke:
         say("")
@@ -985,10 +1121,10 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
     if declared_files:
         stage_cb("declared", "running")
         say("\n" + "=" * 66)
-        say("3b  DECLARED HARVEST AREAS")
+        say("3b  SUPPLIER DECLARATIONS")
         say("=" * 66)
         try:
-            declared, dec_report = producer_geodata.read(
+            declared, dec_report = declarations.read(
                 declared_files, month=month, log=say)
         except Exception as exc:
             stage_cb("declared", "failed", str(exc)[:22])
@@ -1167,9 +1303,13 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         say("\n" + "=" * 66)
         say("8  EUDR FIELDS")
         say("=" * 66)
+        stage_cb("eudr", "running")
         _month_census(merged, say)
         say("")
         merged, view_report = eudr_schema.add(merged, log=say)
+        # The lamp was declared and never signalled, so it sat grey through
+        # every run - which reads as a stage that did not happen.
+        stage_cb("eudr", "done", "{:,} feature(s)".format(len(merged)))
         outcome["eudr_missing"] = view_report.get("missing", {})
         say("")
         say("Added alongside the existing fields, not in place of them. The "

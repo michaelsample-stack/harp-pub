@@ -63,7 +63,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 from collections import Counter
 
 try:
@@ -81,7 +80,11 @@ CA_FIRST_YEAR, CA_LAST_YEAR = 1984, 2022
 
 MIN_SHARE = 5.0
 THIN_PIXELS = 10
-POINT_AREA_HA = 4.0
+# The area a point stands for when it has not stated one. Four hectares is
+# the ceiling for a point in the detection return, and normalise uses the same
+# figure to decide when a centroid is acceptable in the first place - so it is
+# taken from there rather than repeated.
+from .normalise import POINT_AREA_HA              # noqa: E402
 BATCH = 200
 SCALE = 30
 

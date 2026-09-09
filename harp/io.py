@@ -32,13 +32,6 @@ def mkdirs(path: str) -> None:
         pass          # object stores have no real directories
 
 
-def ls(path: str, pattern: str = "*") -> list[str]:
-    fs = _fs(path)
-    if not fs.exists(path):
-        return []
-    return sorted(fs.glob(f"{path.rstrip('/')}/{pattern}"))
-
-
 @contextmanager
 def open_text(path: str, mode: str = "r") -> Iterator[Any]:
     if "w" in mode or "a" in mode:

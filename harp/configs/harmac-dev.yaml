@@ -58,6 +58,19 @@ sources:
     # one the detection service runs from.
     project: eo-sandbox
 
+  supply:
+    # The month's work comes from the delivery record: what arrived, rather
+    # than everything in the register. Toll chippers receive the client's own
+    # logs and return chips, so a receipt from one resolves to the pool of
+    # marks routed there rather than to the chipper's own town.
+    toll_chippers:
+      MIDISL: ["MIDISL", "MID ISLAND"]
+      DCT: ["DCT", "CHAMBERS", "LADYSMITH", "JORDAN RIVER"]
+      CWI-CC: ["COASTLAND", "CWI-CC"]
+      FFP: ["FRANKLIN CUSTOM"]
+      CAHOY: ["CHIPS AHOY"]
+      LONGHOH: ["LONGHOH"]
+
   reference:
     # The supplier alias table, mill locations and stated areas. Shipped with
     # the package; set a folder here to use a different set. A file already
@@ -111,6 +124,15 @@ sources:
     # Note "HARMAC" as a name filter returns nothing; always use the number.
     default_client_number: "00158809"
     district_field: GEOGRAPHIC_DISTRICT_NAME
+    # Read by `harp ften` and `harp resolve`, deliberately not by `harp run`.
+    #
+    # It requires DISTURBANCE_START_DATE and DISTURBANCE_END_DATE, and the
+    # register barely populates them - filtering 3,339 blocks to since-2024
+    # left fifteen. Applying it to a month would drop most of it.
+    #
+    # Detection answers the same question better: a block that was not cut
+    # shows no change in the window, which is evidence rather than a null
+    # field.
     completion_rule:
       require_end_date: true
       require_start: true

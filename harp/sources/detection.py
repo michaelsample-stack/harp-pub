@@ -29,30 +29,5 @@ coding one.
 
 from __future__ import annotations
 
-from typing import Any
 
 
-def from_points(points: list[dict], start: str, end: str, buffer_m: int = 1000) -> list[dict]:
-    """Detect a harvest around each supplied coordinate.
-
-    Wraps the point-to-polygon path. Each point becomes one search buffer and
-    yields at most one harvest polygon, or a flagged centroid if nothing is
-    found.
-    """
-    raise NotImplementedError(
-        "Pending the decision on how HARP calls tracemark-eo."
-    )
-
-
-def from_catchment(catchment: dict, start: str, end: str) -> list[dict]:
-    """Detect every harvest inside a supplier's declared sourcing area.
-
-    Wraps the regional sweep. Returns one feature per detected harvest, not one
-    per catchment.
-
-    Note this is deliberately over-inclusive: a catchment is a search box, not
-    a claim. Over-declaring is permitted under EUDR; under-declaring is not.
-    """
-    raise NotImplementedError(
-        "Pending the decision on how HARP calls tracemark-eo."
-    )

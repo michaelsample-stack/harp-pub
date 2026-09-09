@@ -58,8 +58,6 @@ eleven times too deep and still look plausible.
 
 from __future__ import annotations
 
-import math
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -119,6 +117,10 @@ class Walk:
     covered_bdt: dict = field(default_factory=dict)
     deliveries: list = field(default_factory=list)
     suppliers: dict = field(default_factory=dict)      # code -> bdt
+    # The sources those deliveries actually came from. A supplier can deliver
+    # from several, and only some of them fed this lot - selecting geometry by
+    # supplier pulls in ground that had nothing to do with it.
+    sources: dict = field(default_factory=dict)        # source id -> bdt
     months: set = field(default_factory=set)
     reached: datetime | None = None
     short: dict = field(default_factory=dict)
@@ -323,6 +325,9 @@ def walk(lot: Lot, deliveries: list[dict], f: dict, log=None) -> Walk:
             got[s] += d["bdt"] * share
         w.deliveries.append(d)
         w.suppliers[d["supplier"]] = w.suppliers.get(d["supplier"], 0.0) + d["bdt"]
+        sid = str(d.get("source") or "").strip()
+        if sid:
+            w.sources[sid] = w.sources.get(sid, 0.0) + d["bdt"]
         w.months.add("{:04d}-{:02d}".format(d["when"].year, d["when"].month))
         w.reached = d["when"]
 
