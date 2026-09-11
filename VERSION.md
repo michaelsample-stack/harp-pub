@@ -30,6 +30,12 @@ saying which one is the only way to find out.
 after. The fix was there but sat below the loop that prints it, so the
 returned value was right and the log still showed the month file twice.
 
+## 0.36.x — the version is stated once and checked
+
+The README now states the version at the top. It lives in three places -
+the package, `pyproject.toml` and the README - and a test asserts they agree,
+because a README that states a version is only useful if it is the right one.
+
 ## Documentation, as of 11 September 2026
 
 `docs/HARP_Design_v1_1_0.md` and `docs/HPA1_Decisions_Log_v1_6.md`, with the

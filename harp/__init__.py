@@ -17,7 +17,7 @@ Client-agnostic. A client is a YAML file, not a code fork.
 See docs/HARP_Design_v1_1_0.md for the stage model and the precision tiers.
 """
 
-__version__ = "0.36.0"
+__version__ = "0.36.1"
 __author__ = "NGIS"
 
 from . import assemble, drop, identify, normalise, package, validate

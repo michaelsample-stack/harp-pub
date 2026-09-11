@@ -2,6 +2,8 @@
 
 # HARP — Harvest Area Resolution Pipeline
 
+**Version 0.36.1** · 11 September 2026 · see `VERSION.md` for what changed
+
 HARP aggregates likely harvest areas associated with timber log and wood chip purchases by Harmac Pacific.
 
 Where possible, it resolves purchases using primary government and other authoritative records, including forest tenure, harvest, timber mark, and parcel data.

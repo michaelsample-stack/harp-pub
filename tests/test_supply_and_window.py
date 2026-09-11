@@ -312,6 +312,34 @@ def test_log_volume_is_not_chip_tonnage(tmp_path):
     assert "bdt" not in report
 
 
+
+# ─────────────────────────── the version ───────────────────────────────────
+
+def test_the_version_is_the_same_everywhere():
+    """It is written in three places: the package, pyproject, and the README.
+
+    A README that states a version is only useful if it is the right one, and
+    three copies of a number is how that stops being true quietly.
+    """
+    import os
+    import re
+    import harp
+    root = os.path.dirname(os.path.dirname(os.path.abspath(harp.__file__)))
+
+    toml = open(os.path.join(root, "pyproject.toml"), encoding="utf-8").read()
+    m = re.search(r'^version = "([^"]+)"', toml, re.M)
+    assert m, "pyproject.toml has no version"
+    assert m.group(1) == harp.__version__, (
+        "pyproject says {}, the package says {}".format(m.group(1),
+                                                        harp.__version__))
+
+    readme = open(os.path.join(root, "README.md"), encoding="utf-8").read()
+    m = re.search(r"\*\*Version ([0-9][^*]*)\*\*", readme)
+    assert m, "the README does not state a version"
+    assert m.group(1).strip() == harp.__version__, (
+        "the README says {}, the package says {}".format(m.group(1).strip(),
+                                                         harp.__version__))
+
 # ────────────────────── the lot walkback ───────────────────────────────────
 
 def test_the_walkback_starts_from_when_a_lot_finished():
