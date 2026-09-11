@@ -50,7 +50,9 @@ from collections import Counter
 from datetime import datetime
 
 from . import declarations
+from . import log_deliveries
 from . import reference
+from . import lots as lots_stage
 from . import supply as supply_stage
 from . import (assemble, catchments, dates as dates_stage,
                detect as detect_stage, detection_api, gaps as gaps_stage,
@@ -80,6 +82,11 @@ SCHEMA = [
     "HarvestStartDate", "HarvestEndDate", "harp_harvest_basis",
     "harp_detected_first",
     "harp_producer_number", "harp_producer_source",
+    # Only where a detection fell inside more than one supplier's area. The
+    # name beside them is a ranking, and these are what it was ranked
+    # against - absent when one supplier's area contained it and no
+    # judgement was needed.
+    "harp_producer_candidates", "harp_producer_count",
     # The source a feature came from. Set at assembly and, until now, dropped
     # here - which meant a lot walkback could ask the library for geometry by
     # supplier but never by the delivery it had actually identified.
@@ -345,14 +352,39 @@ def _distribution(sizes: list[float]) -> str:
     return "\n".join(lines)
 
 
-def _window(month: str) -> tuple:
-    """The first and last day of a YYYY-MM."""
+# How far before the declared month detection looks.
+#
+# A chip delivered in May came from a log cut before May - felled, hauled,
+# chipped, delivered. Searching only May finds harvest that has not been
+# delivered yet and misses the harvest that fed the month, which is the wrong
+# ground twice over.
+#
+# The window reaches back and still ends at the month's end rather than
+# shifting wholesale: some of what a month delivers really was cut within it,
+# and a shifted window would say none of it was.
+#
+# Two months is a working assumption about turnaround, not a measurement. If
+# a month's detections cluster at the very start of its window, the lag is
+# too short and that will be visible immediately.
+LAG_MONTHS = 2
+
+
+def _window(month: str, lag: int = LAG_MONTHS) -> tuple:
+    """The detection window for a month: `lag` months before it, through it.
+
+    A May run with a lag of two searches 1 March to 31 May and declares for
+    May.
+    """
     from datetime import date as _d, timedelta as _td
     try:
         y, m = (int(x) for x in month.split("-")[:2])
-        first = _d(y, m, 1)
         last = _d(y + (m == 12), (m % 12) + 1, 1) - _td(days=1)
-        return first.isoformat(), last.isoformat()
+        back = m - int(lag)
+        fy = y
+        while back < 1:
+            back += 12
+            fy -= 1
+        return _d(fy, back, 1).isoformat(), last.isoformat()
     except (ValueError, TypeError):
         return "", ""
 
@@ -372,7 +404,8 @@ def _delivery_file(sorted_items: dict) -> str:
 
 
 def _detect_and_join(cfg, month, start, end, harvest, tenure, search, stamp,
-                     out_dir, api_base, written, say, stage_cb) -> dict:
+                     out_dir, api_base, written, say, stage_cb,
+                     weights=None) -> dict:
     """Union, submit, wait, join back, write the month.
 
     Returns what happened, including where it stopped. A run that could not
@@ -400,8 +433,14 @@ def _detect_and_join(cfg, month, start, end, harvest, tenure, search, stamp,
         say(str(exc))
         return {"stopped_at": "union", "why": str(exc), "merged": []}
 
+    # Named for what it is rather than what was done to it. These land in a
+    # shared bucket at the far end alongside everybody else's, and
+    # "submitted.geojson" says nothing about whose month it is.
+    union_name = "DIST_UNION_{}_{}_{}.geojson".format(
+        str(getattr(cfg, "client", "") or "harp").upper(),
+        month.replace("-", ""), stamp.split("-")[-1])
     union_path = _write(
-        "{}/2-detection/submitted.geojson".format(out_dir),
+        "{}/2-detection/{}".format(out_dir, union_name),
         "harp_search_union", [feat],
         {"window": [start, end],
          "note": feat["properties"]["harp_note"]})
@@ -454,8 +493,8 @@ def _detect_and_join(cfg, month, start, end, harvest, tenure, search, stamp,
     dets = detect_stage.read_detections(det_path, log=say)
     b, c, report = detect_stage.enrich(
         tenure, search, dets, _d.fromisoformat(start), _d.fromisoformat(end),
-        log=say)
-    merged = detect_stage.merge(harvest, b, c)
+        weights=weights, log=say)
+    merged = detect_stage.merge(harvest, b, c, log=say)
     stage_cb("enrich", "done", "{:,}".format(len(b) + len(c)))
 
     month_path = _write(
@@ -713,7 +752,20 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         # much weaker search area and gives no hint that anything is missing.
         mills_csv = reference.mills(cfg)
         if mills_csv:
-            say("  mill locations found in the drop")
+            # Not from the drop - this is the copy that ships with the
+            # package, and saying otherwise sent somebody looking for a file
+            # that was never there.
+            try:
+                import csv as _csv
+                rows = list(_csv.DictReader(
+                    open(mills_csv, encoding="utf-8-sig")))
+                placed = sum(1 for r in rows
+                             if str(r.get("latitude") or "").strip()
+                             or str(r.get("district_code") or "").strip())
+                say("  mill locations from the packaged file - {} of {} "
+                    "supplier(s) can be placed".format(placed, len(rows)))
+            except Exception:
+                say("  mill locations from the packaged file")
     lot_list = _first(sorted_items, "lot_list")
     if lot_list:
         say("  a lot list is here too - `harp lot` will use it")
@@ -733,6 +785,7 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
                 declared_files.append(path)
     if declared_files:
         say("  {} supplier declaration(s)".format(len(declared_files)))
+
 
     marks_dir = private_marks_dir or (
         folder if sorted_items.get("private_marks") else "")
@@ -759,6 +812,22 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
     all_records = [identify.identify(r) for r in identify.load(supply)]
     plan, supply_report, pools = [], {}, {}
     delivery_file = _delivery_file(sorted_items)
+    # Which timber marks arrived this month. A sectioned scale return keeps
+    # its mark column on a later header row, so the sorter files it as
+    # unrecognised - it is picked out here by what is in it.
+    log_files = [getattr(i, "path", "")
+                 for i in (sorted_items.get("log_delivery") or [])
+                 if getattr(i, "path", "")]
+    for kind in ("unknown", "delivery_record"):
+        for item in sorted_items.get(kind) or []:
+            path = getattr(item, "path", "")
+            if (path and path not in log_files
+                    and path != delivery_file
+                    and log_deliveries.looks_like(path)):
+                log_files.append(path)
+    if log_files:
+        say("  {} log delivery record(s)".format(len(log_files)))
+
     stage_cb("supply", "running")
     if delivery_file:
         try:
@@ -771,10 +840,24 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
                                                log=lambda *_a: None)
             plan, supply_report = supply_stage.plan_month(
                 loads, reg, month, cfg, log=say)
+            if supply_report.get("wrong_month"):
+                # Stopped, not warned. A month named for one period and built
+                # from another's deliveries is wrong in a way nothing
+                # downstream can detect, and carrying on would write it to
+                # disk.
+                stage_cb("supply", "failed", "wrong month")
+                return {"ok": False, "stopped_at": "supply",
+                        "why": "the delivery record is for {} and the run is "
+                               "declaring for {}".format(
+                                   " and ".join(supply_report["wrong_month"]),
+                                   month),
+                        "written": written, "stamp": stamp}
+
             wanted, pools, no_id = supply_stage.to_records(plan, log=say)
+
+            pass
             stage_cb("supply", "done", "{:,.0f} BDT".format(
                 supply_report.get("bdt", 0)))
-            outcome["supply"] = supply_report
             keep = {e["source_id"] for e in wanted}
             records = [r for r in all_records
                        if str(getattr(r, "source_id", "")).strip() in keep]
@@ -783,11 +866,67 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
                 say("  nothing in the register matched what was delivered - "
                     "resolving the register instead")
                 records = all_records
+
+            # Marks that arrived this month. The chip record says how much
+            # fibre came; this says which harvest it came from, and a mark on
+            # a real arrival names a specific cut - so these are records in
+            # their own right rather than sources from the register, and four
+            # of the first nine seen were not in the register at all.
+            #
+            # Their volume is log rather than chip and never enters the
+            # month's tonnage: the same wood arrives again later as chips.
+            if log_files:
+                try:
+                    arrivals, _ar = log_deliveries.read(log_files,
+                                                        month=month, log=say)
+                    have = {str(getattr(r, "identifier", "")).strip().upper()
+                            for r in records}
+                    added = 0
+                    for a in arrivals:
+                        ident = a["identifier"]
+                        if not ident or ident.upper() in have:
+                            continue
+                        rec = identify.identify(identify.Record(
+                            source_id="LOG-{}".format(ident),
+                            identifier=ident,
+                            supplier_name=a.get("supplier", ""),
+                            supplier_id=a.get("supplier", ""),
+                            jurisdiction="BC",
+                            product_type="LOG",
+                            raw={"arrived": a.get("first_arrival", ""),
+                                 "volume_m3": a.get("volume_m3", 0),
+                                 "from": a.get("source_file", "")}))
+                        records.append(rec)
+                        have.add(ident.upper())
+                        added += 1
+                    if added:
+                        say("  {} mark(s) from the log record(s) added to "
+                            "the work list".format(added))
+                except Exception as exc:
+                    say("could not read the log delivery record(s): "
+                        "{}".format(str(exc).splitlines()[0][:120]))
+        except (NameError, AttributeError, TypeError) as exc:
+            # A mistake in this code, not a problem with the client's files.
+            # Catching it alongside bad input is how two NameErrors sat here
+            # unnoticed - every month fell back to the whole register and
+            # said only that the delivery record could not be read, which
+            # sounded like the client's fault.
+            raise RuntimeError(
+                "the delivery-driven path is broken, not the delivery "
+                "record: {}: {}".format(type(exc).__name__, exc)) from exc
         except Exception as exc:
+            say("")
+            say("!" * 66)
             say("could not read the delivery record: {}".format(
                 str(exc).splitlines()[0][:140]))
-            say("  resolving the whole register instead")
+            say("")
+            say("  Falling back to resolving the whole register - every "
+                "source it lists, whether or not anything arrived. The month "
+                "will be far larger than it should be and its volume figures "
+                "will be missing.")
+            say("!" * 66)
             records = all_records
+            stage_cb("supply", "failed", "delivery record unreadable")
     else:
         records = all_records
         stage_cb("supply", "skipped", "no delivery record")
@@ -831,15 +970,25 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
             registry = None
 
     # Ask about every identifier at once before the ladder starts, so it
-    # reads an index rather than making 660 sequential requests. That count
-    # is what gets a run throttled, and a throttled run resolves almost
-    # nothing while looking healthy.
+    # reads an index rather than making a request per identifier per rung.
+    # That count is what gets a run throttled, and a throttled run resolves
+    # almost nothing while looking healthy.
+    #
+    # Both sets, together. The delivered sources are one part - and in a
+    # chip-heavy month most of their identifiers are mill town names that
+    # were never going to match a timber mark. The marks that matter are the
+    # pooled ones, the logs sent out for chipping, and prefetching only the
+    # first set left 131 of those to be looked up one at a time.
+    wanted_ids = [r.identifier for r in records
+                  if (r.jurisdiction or "").upper() == "BC"]
+    pooled_ids = [i for slot in pools.values() for i in slot.get("pool", [])]
     index = None
     try:
         say("")
-        index = ften_source.prefetch([r.identifier for r in records
-                                      if (r.jurisdiction or "").upper() == "BC"],
-                                     log=say)
+        if pooled_ids:
+            say("{:,} delivered and {:,} pooled identifier(s) to look "
+                "up".format(len(set(wanted_ids)), len(set(pooled_ids))))
+        index = ften_source.prefetch(wanted_ids + pooled_ids, log=say)
         if index is not None and len(index):
             say("  {:,} row(s) indexed, and cached - a re-run of this month "
                 "will not ask again".format(len(index)))
@@ -944,6 +1093,8 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
             say("")
             say("resolving {} identifier(s) sent to {} toll chipper(s)".format(
                 len(pool_records), len(pools)))
+            if index is not None and len(index):
+                say("  reading the prefetched index rather than asking again")
             pool_broke, pool_unresolved = [], 0
             for n, (code, slot, rec) in enumerate(pool_records, 1):
                 try:
@@ -1205,6 +1356,8 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
     # stdout, so a run that stopped at detection looked identical on disk to
     # one that never tried.
     outcome = {"stopped_at": "split", "why": ""}
+    if supply_report:
+        outcome["supply"] = supply_report
     merged = []
     if not month:
         for k in ("union", "detect", "enrich", "write"):
@@ -1224,14 +1377,25 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         say("=" * 66)
         outcome["why"] = "detection turned off"
     else:
-        start, end = _window(month)
+        lag = int(((getattr(cfg, "sources", None) or {}).get("detection")
+                   or {}).get("lag_months", LAG_MONTHS))
+        start, end = _window(month, lag)
         if not start:
             outcome.update(stopped_at="union", why="bad month: " + month)
             say("\n--month wants YYYY-MM, got '{}'".format(month))
         else:
+            # What each supplier delivered this month, for ranking the
+            # candidates where a detection falls inside more than one
+            # supplier's area.
+            weights = {}
+            for e in plan:
+                for key in (e.get("supplier"), e.get("supplier_name")):
+                    k = str(key or "").strip().upper()
+                    if k:
+                        weights[k] = weights.get(k, 0.0) + e.get("bdt", 0.0)
             outcome = _detect_and_join(
                 cfg, month, start, end, harvest, tenure, search, stamp,
-                out_dir, api_base, written, say, stage_cb)
+                out_dir, api_base, written, say, stage_cb, weights)
             merged = outcome.pop("merged", [])
 
     # ---- 8 to 11: project, validate, clean, stage -------------------------
@@ -1272,6 +1436,17 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
                 stage_cb("species", "done", "{:,} named".format(
                     sp_report.get("with_species", 0)))
                 outcome["with_species"] = sp_report.get("with_species", 0)
+        except (TypeError, ValueError, AttributeError) as exc:
+            # A mistake in our code, not a problem with the raster. Catching
+            # it alongside a service failure is how a five-value return
+            # meeting a four-value unpack cost a whole month of species and
+            # reported it as "could not read species" - which sounded like
+            # Earth Engine, and left 79% of the month estimated from
+            # neighbours instead.
+            stage_cb("species", "failed", "broken")
+            raise RuntimeError(
+                "the species stage is broken, not the raster: {}: {}".format(
+                    type(exc).__name__, exc)) from exc
         except Exception as exc:
             # Species is an addition to a month, not a precondition for one.
             stage_cb("species", "failed", str(exc)[:22])
@@ -1306,7 +1481,7 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         stage_cb("eudr", "running")
         _month_census(merged, say)
         say("")
-        merged, view_report = eudr_schema.add(merged, log=say)
+        merged, view_report = eudr_schema.add(merged, month=month, log=say)
         # The lamp was declared and never signalled, so it sat grey through
         # every run - which reads as a stage that did not happen.
         stage_cb("eudr", "done", "{:,} feature(s)".format(len(merged)))
@@ -1409,6 +1584,21 @@ def run(cfg, folder: str, *, month: str = "", private_marks_dir: str = "",
         written.append(log_path)
     except OSError:
         pass
+
+    # Before the list is printed, not after - which is where this sat, so
+    # the fix was in the returned value and the log still showed the month
+    # file twice.
+    #
+    # It is written twice on purpose: once at the join back and again once
+    # the EUDR fields are on it. Listing the same path twice reads as a
+    # mistake rather than as the second write it is.
+    seen, unique = set(), []
+    for path in written:
+        key = os.path.normpath(str(path)) if path else ""
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(path)
+    written[:] = unique
 
     say("\n" + "=" * 66)
     say("run {}".format(row["run_id"]))

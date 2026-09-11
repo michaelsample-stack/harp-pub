@@ -224,6 +224,29 @@ def plan_month(deliveries: list[dict], register: list[dict], month: str = "",
 
     plan.sort(key=lambda e: -e["bdt"])
     report = summarise(plan, month, opts, log=log)
+
+    # Does this record belong to the month being declared?
+    #
+    # Nothing checked. A drop folder for one month run with another month's
+    # label produced a file named for the second and filled with the first's
+    # deliveries, and said nothing - which is the worst kind of wrong output,
+    # because it looks right.
+    if month:
+        seen = sorted({e["first_load"][:7] for e in plan if e["first_load"]}
+                      | {e["last_load"][:7] for e in plan if e["last_load"]})
+        if seen and month not in seen:
+            report["wrong_month"] = seen
+            log("")
+            log("!" * 66)
+            log("This delivery record is for {}, and the run is declaring "
+                "for {}.".format(" and ".join(seen), month))
+            log("")
+            log("  The month would be named {} and contain {}'s deliveries. "
+                "Nothing downstream would say so.".format(
+                    month, seen[0]))
+            log("")
+            log("  Either the wrong folder was given, or the wrong month.")
+            log("!" * 66)
     return plan, report
 
 

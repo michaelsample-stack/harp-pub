@@ -374,8 +374,14 @@ def date_undated(features: list[dict], start: str, end: str, cfg,
 
     out_dir = out_dir or cfg.paths.outbox
     os.makedirs(out_dir, exist_ok=True)
+    # Named like the union for the same reason: these arrive at the far end
+    # in a shared bucket, and a file called "dating-probe" says nothing about
+    # whose it is or what month it belongs to.
+    probe_name = "DIST_DATES_{}_{}.geojson".format(
+        str(getattr(cfg, "client", "") or "harp").upper(),
+        str(start).replace("-", "")[:6])
     probe_path = io.write_json(
-        os.path.join(out_dir, "dating-probe.geojson"),
+        os.path.join(out_dir, probe_name),
         {"type": "FeatureCollection", "name": "harp_dating_probe",
          "features": [probe]})
     log("  {}".format(probe_path))

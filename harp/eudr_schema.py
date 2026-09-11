@@ -63,6 +63,8 @@ file Californian harvest as Canadian, and nothing downstream would notice.
 
 from __future__ import annotations
 
+import re
+
 import json
 from collections import Counter
 
@@ -109,20 +111,42 @@ def country_of(jurisdiction: str) -> str:
 
 
 def place_of(props: dict) -> str:
-    """What identifies where this was cut.
+    """What identifies this particular harvest.
 
-    Best first: the timber mark, which names a specific harvest; then whatever
-    the area was called; then the district. A detection carries whichever of
-    these its parent area could give it.
+    A timber mark names a specific harvest and is used as it stands. Anything
+    else identifies the area a detection was found in, not the detection - so
+    every harvest in one district carried the same string, and a month once
+    came back with two and a half thousand features all called "Campbell
+    River Natural Resource District".
+
+    That is not wrong so much as useless: a field meant to identify a place
+    that names the same place two thousand times identifies nothing. Where
+    there is no mark, the place is built from where it is and which harvest
+    it is - the area's code, the month, and a sequence within it.
     """
-    for key in ("harp_timber_mark", "harp_key_name", "harp_key",
-                "harp_district"):
+    mark = str(props.get("harp_timber_mark") or "").strip()
+    if mark:
+        return mark
+
+    where = ""
+    for key in ("harp_key", "harp_district", "harp_key_name"):
         v = str(props.get(key) or "").strip()
         # A key that is only a client number identifies a company, not a
         # place, so it is skipped rather than shipped as one.
         if v and not (key == "harp_key" and v.isdigit()):
-            return v
-    return ""
+            where = v
+            break
+    if not where:
+        where = str(props.get("harp_supplier_code")
+                    or props.get("harp_supplier") or "").strip()
+    if not where:
+        return ""
+
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", where).strip("-").upper()[:24]
+    month = str(props.get("harp_month") or "").replace("-", "")
+    seq = str(props.get("harp_seq") or "").strip()
+    parts = [p for p in (slug, month, seq) if p]
+    return "-".join(parts)
 
 
 def _polygon_area_ha(geom) -> float:
@@ -249,13 +273,31 @@ def project_feature(feature: dict) -> tuple[dict, list]:
             "properties": out}, missing
 
 
-def add(features: list[dict], log=print) -> tuple[list[dict], dict]:
+def add(features: list[dict], month: str = "",
+        log=print) -> tuple[list[dict], dict]:
     """The four EUDR fields, alongside everything already on the feature.
 
     This is what goes into validation and into the library. Nothing is
     removed - the month keeps its `harp_` fields, because a production lot is
     resolved against them later.
     """
+    # A sequence within each area, so ProductionPlace identifies one harvest
+    # rather than the district it sits in. Numbered per area rather than
+    # across the month, so the number means something: DCR-202605-0007 is the
+    # seventh harvest found in that district.
+    counts: Counter = Counter()
+    for f in features:
+        props = f.get("properties") or {}
+        if str(props.get("harp_timber_mark") or "").strip():
+            continue
+        where = str(props.get("harp_key") or props.get("harp_district")
+                    or props.get("harp_key_name")
+                    or props.get("harp_supplier_code") or "").strip()
+        counts[where] += 1
+        props["harp_seq"] = "{:04d}".format(counts[where])
+        if month:
+            props["harp_month"] = month
+
     out, missing, points = [], Counter(), 0
     for f in features:
         projected, gaps = project_feature(f)

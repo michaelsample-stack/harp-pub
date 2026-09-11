@@ -222,6 +222,33 @@ def _date_note(props: dict) -> str:
 
 # ──────────────────────────────── reading ──────────────────────────────────
 
+def _jurisdiction(geom) -> str:
+    """Where a declared area is, from where it is.
+
+    Coarse on purpose: a longitude and latitude are enough to say which side
+    of a border a harvest area sits, and a producer's own file is the one
+    place we have coordinates before anything else has run.
+    """
+    try:
+        from shapely.geometry import shape
+        c = shape(geom).centroid
+        lon, lat = c.x, c.y
+    except Exception:
+        return ""
+    if lat >= 60:
+        return "YT" if lon < -123 else "NT"
+    if lat >= 49:
+        # North of the 49th on this coast is British Columbia, except the
+        # part of Washington that reaches above it - the Point Roberts
+        # exclave and the southern Gulf Islands are both west of -122.7.
+        return "BC" if lon <= -114 else "AB"
+    if lat >= 45.5:
+        return "WA" if lon <= -117 else "ID"
+    if lat >= 42:
+        return "OR"
+    return "CA"
+
+
 def read(paths, month: str = "", mark_lookup=None, log=print) -> tuple:
     """Every distinct harvest area across these files.
 
@@ -328,8 +355,34 @@ def read(paths, month: str = "", mark_lookup=None, log=print) -> tuple:
             notes.append(name_note)
             counts["placeholder producer"] += 1
         volume = sum(float(p.get("NetVolume_m3") or 0) for p in products)
-        species = sorted({str(p.get("CommonName") or "").strip()
-                          for p in products if p.get("CommonName")})
+
+        # The producer states a species per product with its volume, so the
+        # mix and the dominant both come from what they said rather than from
+        # a raster. Ordered by volume: a declared area that is mostly hemlock
+        # should say hemlock first.
+        #
+        # Without a dominant these features counted as a blank species name
+        # in the month's tally - forty-three of them in one month - which
+        # read as a raster class we could not name and was nothing of the
+        # kind.
+        by_volume: dict = {}
+        for prod in products:
+            cn = str(prod.get("CommonName") or "").strip()
+            if not cn:
+                continue
+            try:
+                v = float(prod.get("NetVolume_m3") or 0)
+            except (TypeError, ValueError):
+                v = 0.0
+            by_volume[cn] = by_volume.get(cn, 0.0) + (v if v == v else 0.0)
+        ranked = sorted(by_volume.items(), key=lambda kv: (-kv[1], kv[0]))
+        species = [n for n, _v in ranked]
+        total_v = sum(by_volume.values())
+        species_json = [
+            {"CommonName": n,
+             "ProportionPct": round(v / total_v * 100.0, 1) if total_v else 0,
+             "Source": "declared by the producer"}
+            for n, v in ranked]
 
         kept.append({"type": "Feature", "geometry": geom, "properties": {
             "ProducerName": name,
@@ -357,11 +410,22 @@ def read(paths, month: str = "", mark_lookup=None, log=print) -> tuple:
                                        or "").strip()[:10],
             "harp_declared_end": str(props.get("HarvestEndDate")
                                      or "").strip()[:10],
+            # From the geometry rather than a default. These arrive with no
+            # jurisdiction at all, so the EUDR country field fell back to
+            # whatever the config said - right for a BC producer by luck and
+            # wrong the first time a US one declares.
+            "harp_jurisdiction": _jurisdiction(geom),
             "harp_production_from": first,
             "harp_production_to": last,
             "harp_production_months": " ".join(sorted(months)),
             "harp_volume_m3": round(volume, 3),
             "harp_species": "; ".join(species),
+            "harp_species_dominant": species[0] if species else "",
+            "harp_species_json": (json.dumps(species_json)
+                                  if species_json else ""),
+            "harp_species_basis": (
+                "stated by the producer in their own file, ordered by "
+                "declared volume" if species else ""),
             "harp_boom": str(props.get("BoomName") or ""),
             "harp_source_file": rec["file"],
             "harp_data_note": "; ".join(notes),

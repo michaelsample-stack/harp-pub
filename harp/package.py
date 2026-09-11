@@ -52,6 +52,13 @@ SIGNATURES = [
      "month's."),
     ("private_marks", {"TIMBER_MARK", "PID"}, set(),
      "BC scaled-timbermark extract - a registry. Accumulates; never replaced."),
+    # Before the delivery record: a scale return carries a timber mark where
+    # a delivery record never does, and that is what tells them apart.
+    ("log_delivery", {"TIMBER_MARK"}, {"Lot ID"},
+     "a log delivery record - which timber marks arrived and when. Marks on "
+     "a real arrival, so these resolve to a cut block and are finished. "
+     "Their volume is log, not chip, and is never added to the month's "
+     "tonnage."),
     ("lot_list", {"Lot ID"}, set(),
      "the month's production lots - what was made, when, how much, and the "
      "measured species split. The walkback starts here."),

@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Version | 1.0.0 |
+| Version | 1.1.0 |
 | Status | End to end, from a client drop to a staged library month and a lot package. |
 | Date | 9 September 2026 |
 | Owner | M. — NGIS |
@@ -20,6 +20,7 @@
 | 0.2.0 | 2026-08-12 | Assembly and validation stages specified against the real `eudr_geojson` 0.4.0 and `eudr_clean` 0.5.5 interfaces. Monthly-drop comparison added. Merged into the existing HARP repo — YAML config, run manifest, `sce_base` normalisation. R8 catchment built. Two field-discovered bugs recorded in §5.4. |
 | 0.3.0 | 2026-08-13 | R5b — the BC private mark registry, via the new `bcparcel` package. Package sorting by column signature. Detection placement decided against the real `tracemark-eo` functions. Preemptive filtering removed. Operating envelopes dissolved to one row. |
 | 0.4.0 | 2026-08-17 | Detection specified in full — search area sources, the two-run monthly cycle, submit/collect. History and retention decided: 24-month declaration window, archive the inputs. Overlap handling stated. |
+| 1.1.0 | 2026-09-11 | Detection reaches back two months. Log delivery records read. One feature per detection, at its strongest tier, with candidate producers named. ProductionPlace identifies a harvest rather than a district. The monthly input library. Section letters put back in order. |
 | 1.0.0 | 2026-09-09 | The month's work taken from the delivery record rather than the supply register. Toll-chipped receipts resolved to the pool of marks routed to the chipper. Supplier declarations brought under one roof, whether they carry geometry or identifiers. Washington Forest Practices permits resolved to harvest units. A second route to the tenure register. |
 | 0.9.0 | 2026-09-09 | Harvest dates and species added as stages, and a gap-filling stage after them. The reference data - supplier register, alias table, mill locations, stated areas - moved inside the package. The tenure register asked in batches and cached between runs. Producer name set on every search area route, after a month went out with 95% of features unnamed. |
 | 0.8.0 | 2026-09-01 | Detection folded into a run - `harp run --month` now goes from the drop to a staged month, and everything writes to one log. The monthly library added, with pending, quarantine and an approval gate. Lot walkback added. `ProducerName` carried from the register rather than the client's code, after a supplier code covering six unrelated companies reached a customer deliverable. The EUDR projection added ahead of validation. |
@@ -255,7 +256,32 @@ dropped. One detection, one feature, the best attribution available.
 
 ---
 
-## 3C. The monthly library
+### The window a month searches
+
+A month searches the two months before it as well as itself. A May run covers
+1 March to 31 May and declares for May.
+
+A chip delivered in May came from a log cut before May - felled, hauled,
+chipped, delivered. Searching only May finds harvest that has not been
+delivered yet and misses the harvest that fed the month: the wrong ground
+twice over.
+
+The window ends at the month's end rather than shifting wholesale, because
+some of what a month delivers really was cut within it. A shifted window
+would say none of it was.
+
+**Two months is a working assumption about turnaround, not a measurement.**
+`lag_months` in config. If a month's detections cluster at the very start of
+its window, the lag is too short and that will be visible immediately.
+
+A consequence worth stating: the same cut block appears in several months. A
+block cut in March feeds March, April and May deliveries and turns up in all
+three. That is correct rather than duplication - each copy is tied to the
+deliveries that drew it in, through `harp_source_id`.
+
+---
+
+## 3B. The monthly library
 
 A lot's chips reach back past the month it was made - a June lot has been seen
 reaching twelve days into May. So resolving a lot means opening several months,
@@ -310,6 +336,52 @@ submissions, a person looks first.
 
 ---
 
+## 3C. One detection, one feature
+
+A detection can fall inside several suppliers' search areas at once - two
+sawmills in one natural resource district, and nothing says which of them cut
+that patch. It can also fall inside a registered cut block and a district at
+the same time.
+
+Emitting a feature for each combination quadrupled a month: 3,254 detections
+became 14,348 features, most of them the same polygon under different names
+and different tiers.
+
+### One tier
+
+A detection appears under the strongest area that contained it. Knowing a
+harvest sits in a registered block already places it more tightly than a
+district can, so the district claim adds nothing and its presence made the
+file contradict itself - the same ground asserted twice at two strengths,
+sometimes naming two different suppliers.
+
+Areas resolved from an identifier are not affected. They are not detections
+and do not compete: two registered blocks can legitimately share a boundary.
+
+### One supplier, with the others named
+
+Where several suppliers' areas contain a detection, the largest by that
+month's delivered tonnage is named, and the ranking is recorded rather than
+hidden:
+
+| | |
+|---|---|
+| `ProducerName` | the largest candidate |
+| `harp_producer_source` | that it is a ranking, not an establishment |
+| `harp_producer_candidates` | every candidate with the tonnage that ranked them |
+| `harp_producer_count` | how many there were |
+
+The candidate fields are absent where one supplier's area contained it, so a
+reader can tell the firm rows from the ranked ones at a glance.
+
+**Keeping one at random was considered and rejected.** It replaces "we do not
+know which of these four" with "it was this one" - which looks certain and is
+wrong most of the time. Ranking by tonnage is also a guess, but it is a stated
+guess with its reasoning attached and its alternatives beside it: anyone can
+see it and disagree.
+
+---
+
 ## 3D. The EUDR projection
 
 Two functions, and the order matters.
@@ -360,6 +432,33 @@ downstream would notice.
 
 ---
 
+### ProductionPlace identifies a harvest
+
+A timber mark is used as it stands: it already names a specific cut.
+
+Everything else is built from where it is and which harvest it is -
+`DCR-202605-0007`, the seventh harvest found in that district that month. The
+district name stays on `harp_key_name`.
+
+It named the area before, so every harvest in one district carried the same
+string and a month came back with two and a half thousand features called
+"Campbell River Natural Resource District". A field meant to identify a place
+that names the same place two thousand times identifies nothing.
+
+### A supplier known only by a code
+
+The client buys under purchasing codes it has not explained - five of them,
+covering fifty-seven sources and real tonnage. Every detection in their search
+areas inherited an empty producer.
+
+    Supplier RYK (name not provided by the client)
+
+Better than blank and better than "Unknown": it says precisely what is missing
+and who can supply it, and it keeps the gap countable. A real name wins
+wherever there is one.
+
+---
+
 ## 3E. From a lot back to its deliveries
 
 A pulp lot is made from chips that arrived over the preceding weeks, already
@@ -386,8 +485,12 @@ A run reports that ratio, and says so loudly outside 1.5 to 3.
 
 ### The walk
 
-From the lot's earliest production time, backwards through the delivery record,
+From the moment the lot finished, backwards through the delivery record,
 accumulating **per species** until each has reached twice its requirement.
+
+**From the finish, not the start.** A lot can run for weeks - one ran for
+seventy days - and fibre that arrived partway through went into it. Walking
+back from the start would exclude everything delivered during production.
 
 **Twice** is the margin. Piles are reclaimed from the top, so material at the
 bottom can sit a long time, and over-declaring is the failure that survives an
@@ -400,13 +503,24 @@ with no minimum share - a load that is 95% cedar enters a no-cedar lot on the
 strength of its 2% fir, because that fir is real and plausibly came off the
 same cut block. A stand is rarely one species.
 
+### Reading across months
+
+Walking back until the mass is covered can reach through several months of
+deliveries - a large lot took 168 loads spanning two. So the walk reads the
+monthly input library rather than one file, which is what the library is for.
+
+Reading a single record made a large lot look short: not because it was, but
+because the record was not there.
+
 ### What comes out
 
-Every supplier in that window, and every month it touched. Then every feature
-for those suppliers, from those library months.
+Every source in that window, every supplier, and every month it touched. Then
+every feature for those sources, from those library months.
 
-**Not every feature tied to a specific delivery** - the geometry carries a
-supplier, not a delivery id. That is the precision limit and it is stated on
+**Selected by source rather than by supplier.** A supplier can deliver from
+several sources and only some of them fed a given lot; `harp_source_id` is on
+every feature and says which. Months built before that field was kept fall
+back to the supplier, which is the older and looser answer.
 the output.
 
 **A lot the delivery record cannot cover produces nothing.** A partial answer
@@ -414,7 +528,7 @@ that looks complete is worse than none.
 
 ---
 
-## 3G. Producer-declared harvest areas
+## 3F. Producer-declared harvest areas
 
 A supplier exports their own harvest areas as GeoJSON. They are taken at their
 word: the producer asserts they harvested here, and that assertion is the
@@ -482,7 +596,7 @@ same ground feeding three months of production.
 
 ---
 
-## 3K. What arrived, and what kind it is
+## 3G. What arrived, and what kind it is
 
 **The month's work comes from the delivery record.** The supply source
 register is a master list of everything the client might buy from; a July run
@@ -512,7 +626,7 @@ honest answer and no amount of asking the client will improve it.
 
 That said, it is a ceiling where suppliers will not or cannot provide, not
 where nothing exists - one merchant supplier declares Washington permit
-numbers voluntarily, and those resolve. See 3L.
+numbers voluntarily, and those resolve. See 3H.
 
 **Toll chipped is the opposite.** The client bought those logs, under marks
 already in the register, and sent them to a chipper. The register records
@@ -539,7 +653,7 @@ residual and bounded at district level", it is something the client can act on
 
 ---
 
-## 3L. Supplier declarations
+## 3H. Supplier declarations
 
 Two suppliers declare where their wood came from and neither does it the same
 way. One exports GeoJSON, one file per contract and boom, with the harvest
@@ -585,6 +699,65 @@ state has no boundary for, which is worth knowing and is not a harvest area.
 
 **Why P2a and not P1a.** A permit covers several approved units, and the
 supplier named the permit rather than which unit fed a delivery.
+
+---
+
+### Species a producer stated
+
+A producer's file names a species per product with its volume, so the mix and
+the dominant both come from what they said rather than from a raster, ordered
+by declared volume.
+
+Without a dominant these counted as a blank species name in the month's tally
+- forty-three of them in one month - which read as a raster class that could
+not be named and was nothing of the kind.
+
+---
+
+## 3I. Log delivery records
+
+The chip delivery record says how much fibre arrived. It does not say which
+harvest it came from, because a chip carries no mark - which is why most of a
+month resolves to a search area.
+
+A log delivery record says the other half: **which timber marks arrived, and
+when.** A mark on a real arrival names a specific harvest, so these resolve
+to a cut block and are finished.
+
+The first such file carried nine marks, four of which were not in the supply
+register at all.
+
+### Two records of two different things
+
+Neither replaces the other, and log arrivals never enter the tonnage
+arithmetic. Those logs are chipped elsewhere and arrive again later as chips;
+counting both would count the same wood twice.
+
+Their volume is cubic metres of log against bone-dry tonnes of chip, and it is
+carried as stated rather than converted. The factor varies by species and
+moisture, and a wrong one is worse than two units side by side.
+
+### More than one format
+
+Some suppliers export a scale return from their system - a sectioned file with
+a header row per record type, the date on the header row and the marks on the
+detail rows. Others send a spreadsheet somebody typed.
+
+The reader looks for three facts rather than a layout:
+
+    which mark      TIMBER_MARK, MARK, Timber Mark
+    when it came    Arrival_Date, DATE_IN, Received, Delivery Date
+    how much        METRIC_NET, Volume, m3, Net
+
+A new supplier's spelling is a line in that table, not a new reader.
+
+### What is not yet known
+
+The file does not say where the logs were headed. A mark's entry in the supply
+register records its chipper, but only for marks the register holds - and four
+of the first nine were not in it. Without that link, a block resolved from a
+log arrival sits in the library unreachable by a lot walkback, which selects
+geometry by the chip deliveries that fed a lot.
 
 ---
 
@@ -634,7 +807,7 @@ stated instead.
 
 ---
 
-## 3H. Species
+## 3K. Species
 
 What was growing on each harvest area, read from national rasters after the
 month is assembled - so every route gets it the same way regardless of how its
@@ -702,7 +875,7 @@ one.
 
 ---
 
-## 3I. Filling the gaps
+## 3L. Filling the gaps
 
 The detection service and the species rasters leave a few percent of a month
 unanswered. Across two real lot files it was about 7% for dates and under 1%
@@ -755,7 +928,7 @@ can be told from one that does not after the `harp_` fields are stripped.
 
 ---
 
-## 3F. Library interfaces
+## 3M. Library interfaces
 
 Confirmed against the real packages, not inferred.
 
@@ -909,6 +1082,29 @@ is a search area, and inside whose area no detection was found in the window,
 contributes no declared geometry for that month. That is correct - nothing
 places a harvest there in the period - but it reads oddly against a coverage
 table showing them resolved.
+
+---
+
+## 4A. Sorting a package
+
+A client sends a folder holding a job list, one or more registry extracts, and
+in time other things nobody has described yet.
+
+**Recognise by columns, never by filename.** Filenames in this data have been
+proven wrong three separate ways: a workbook named "June 2026" whose data sheet
+is "January 2026" and whose records were processed in February; a "Calendar
+Year" label on files that are demonstrably not year-to-date; and a
+`ProcessedOn` that varies per record rather than per file.
+
+| Kind | Signature | Behaviour |
+|---|---|---|
+| job list | `SOURCEID` | **replaces** — the current statement of what needs answering |
+| registry extract | `TIMBER_MARK` + `PID` | **accumulates** — never replaced |
+| supplier geodata | `geometry` | attaches to one source |
+| unknown | — | reported with the columns it had |
+
+A file matching no signature is a finding, not an error: a new kind of file has
+arrived and needs a signature adding.
 
 ---
 
@@ -1112,26 +1308,52 @@ Confirmed to exist, not yet queried.
 
 ---
 
-## 4A. Sorting a package
+## 6A. The monthly input library
 
-A client sends a folder holding a job list, one or more registry extracts, and
-in time other things nobody has described yet.
+A run reads a folder. The library is how those folders are organised, and it
+uses the layout the cloud deployment specifies:
 
-**Recognise by columns, never by filename.** Filenames in this data have been
-proven wrong three separate ways: a workbook named "June 2026" whose data sheet
-is "January 2026" and whose records were processed in February; a "Calendar
-Year" label on files that are demonstrably not year-to-date; and a
-`ProcessedOn` that varies per record rather than per file.
+    <intake>/YYYY-MM/<submission-id>/
+        SOURCE.xlsx
+        <delivery record>
+        <private mark extract>
+        <producer declarations>
+        <log delivery record>
+        <lot list>
 
-| Kind | Signature | Behaviour |
-|---|---|---|
-| job list | `SOURCEID` | **replaces** — the current statement of what needs answering |
-| registry extract | `TIMBER_MARK` + `PID` | **accumulates** — never replaced |
-| supplier geodata | `geometry` | attaches to one source |
-| unknown | — | reported with the columns it had |
+`paths.intake` in config - a local path or a `gs://` one, with nothing else
+changing.
 
-A file matching no signature is a finding, not an error: a new kind of file has
-arrived and needs a signature adding.
+**The submission id is for corrections.** A month arrives as `-001`. If a file
+is later found to be wrong, the corrected month arrives as `-002` and the
+original stays exactly as it was processed. Without it a correction either
+overwrites what was actually used or sits beside it with nothing to say which
+is which. The latest is used unless one is named.
+
+It is not for batching: a delivery spread over two days is still one
+submission.
+
+**The library is read across months, not just for the month being run.** A lot
+walkback reaches back until the mass is covered, and that can span several
+months of deliveries.
+
+### What a month needs
+
+| | |
+|---|---|
+| delivery record | required - the month's scope comes from it |
+| supply source register | required - what each delivered source is |
+| private mark extracts | strongly wanted - without them private marks stay at a weaker tier |
+| producer declarations | whatever suppliers sent, in whatever form |
+| log delivery record | which marks arrived, where available |
+| lot list | for `harp lot`, not for the run |
+
+Files are recognised by their columns, never their names. Anything
+unrecognised is reported rather than rejected.
+
+**A stale extract reads as valid.** The mark extracts are snapshots rather
+than cumulative, so a mark scaled in June can be absent from a file exported
+in August - the current one is needed each month.
 
 ---
 

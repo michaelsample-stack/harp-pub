@@ -96,10 +96,12 @@ class App(tk.Tk):
         # A range rather than a single month. A run still declares for one
         # month, but the detection window can reach back further - which is
         # what a lot spanning two months needs.
-        self.from_month = tk.StringVar(value="")
-        self.from_year = tk.StringVar(value="")
+        # The month being declared. The window is derived from it and the
+        # lag rather than entered, so a run cannot declare for a period it was
+        # not asked to.
         self.to_month = tk.StringVar(value="")
         self.to_year = tk.StringVar(value="")
+        self.lag_months = tk.StringVar(value=str(run_stage.LAG_MONTHS))
         self.max_block = tk.StringVar(value="2000")
         self.skip_validate = tk.BooleanVar(value=False)
         self.api_base = tk.StringVar(value=detection_api.DEFAULT_BASE)
@@ -137,8 +139,15 @@ class App(tk.Tk):
         ttk.Label(top, text="harp " + harp.__version__,
                   foreground=MUTED).pack(side="right")
 
-        self.nb = ttk.Notebook(self)
-        self.nb.pack(fill="both", expand=True, padx=10, pady=4)
+        # A draggable divider between the tabs and the log. The log is where
+        # a run says what it is doing, and it was being squeezed to eleven
+        # lines by a file list that only fills at the end - so the log gets
+        # the larger share and either can be resized.
+        self.split = ttk.PanedWindow(self, orient="vertical")
+        self.split.pack(fill="both", expand=True, padx=10, pady=4)
+
+        self.nb = ttk.Notebook(self.split)
+        self.split.add(self.nb, weight=2)
         tabs = {}
         for key, label in (("month", "  The month  "),
                            ("drop", "  The drop  "),
@@ -153,9 +162,9 @@ class App(tk.Tk):
         self._build_lots(tabs["lots"])
         self._build_setup(tabs["setup"])
 
-        lf = ttk.LabelFrame(self, text="Log")
-        lf.pack(fill="both", expand=False, padx=14, pady=(0, 4))
-        self.txt = tk.Text(lf, height=11, font=("Consolas", 9), wrap="word")
+        lf = ttk.LabelFrame(self.split, text="Log")
+        self.split.add(lf, weight=3)
+        self.txt = tk.Text(lf, height=20, font=("Consolas", 9), wrap="word")
         sb = ttk.Scrollbar(lf, command=self.txt.yview)
         self.txt.config(yscrollcommand=sb.set)
         self.txt.pack(side="left", fill="both", expand=True, padx=(6, 0),
@@ -182,9 +191,9 @@ class App(tk.Tk):
                 ("Client drop", self.drop_dir, self.pick_drop,
                  "the folder they sent"),
                 ("Supplier register", self.register_file, self.pick_register,
-                 "says who still needs a search area"),
+                 "leave empty to use the packaged file"),
                 ("Mill locations", self.mills_file, self.pick_mills,
-                 "optional — Find mills makes it")):
+                 "leave empty to use the packaged file")):
             r = ttk.Frame(g)
             r.pack(fill="x", padx=10, pady=3)
             ttk.Label(r, text=label, width=17).pack(side="left")
@@ -193,37 +202,44 @@ class App(tk.Tk):
             ttk.Button(r, text="…", width=3, command=cmd).pack(side="left")
             ttk.Label(r, text=hint, foreground=MUTED,
                       width=36).pack(side="left", padx=6)
+            # Directly under each, because the wrong file in either is
+            # silent everywhere else - the run builds no search areas and
+            # says nothing about why.
             if var is self.register_file:
-                # Directly under the field, because a wrong file here is
-                # silent everywhere else.
                 self.register_note = ttk.Label(g, text="", foreground=MUTED)
                 self.register_note.pack(anchor="w", padx=(140, 0))
+            if var is self.mills_file:
+                self.mills_note = ttk.Label(g, text="", foreground=MUTED)
+                self.mills_note.pack(anchor="w", padx=(140, 0))
 
         self.drop_note = ttk.Label(g, text="", foreground=MUTED)
         self.drop_note.pack(anchor="w", padx=10, pady=(2, 0))
 
+        # The month being declared, and how far back to look for the harvest
+        # behind it. The window follows from those two rather than being
+        # typed: a run declares for one month, and picking its start and end
+        # separately is a way to declare for a period nobody asked about.
         r = ttk.Frame(g)
         r.pack(fill="x", padx=10, pady=(6, 2))
-        ttk.Label(r, text="Detection window", width=17).pack(side="left")
+        ttk.Label(r, text="Month to declare", width=17).pack(side="left")
         months = ["{:02d}".format(m) for m in range(1, 13)]
         years = [str(y) for y in range(date.today().year - 4,
                                        date.today().year + 2)]
-        ttk.Combobox(r, textvariable=self.from_month, values=months,
-                     width=4, state="readonly").pack(side="left")
-        ttk.Combobox(r, textvariable=self.from_year, values=years,
-                     width=6, state="readonly").pack(side="left", padx=(3, 0))
-        ttk.Label(r, text="to").pack(side="left", padx=8)
+        ttk.Combobox(r, textvariable=self.to_year, values=years,
+                     width=6, state="readonly").pack(side="left")
+        ttk.Label(r, text="-").pack(side="left", padx=2)
         ttk.Combobox(r, textvariable=self.to_month, values=months,
                      width=4, state="readonly").pack(side="left")
-        ttk.Combobox(r, textvariable=self.to_year, values=years,
-                     width=6, state="readonly").pack(side="left", padx=(3, 0))
         for label, back in (("this month", 0), ("last month", 1),
-                            ("last 3", 3)):
+                            ("2 back", 2)):
             ttk.Button(r, text=label, width=11,
                        command=lambda b=back: self.set_month(b)).pack(
                            side="left", padx=3)
-        ttk.Button(r, text="clear", width=6,
-                   command=self.clear_month).pack(side="left", padx=3)
+        ttk.Label(r, text="looking back").pack(side="left", padx=(24, 4))
+        ttk.Spinbox(r, from_=0, to=12, textvariable=self.lag_months,
+                    width=4).pack(side="left")
+        ttk.Label(r, text="month(s)",
+                  foreground=MUTED).pack(side="left", padx=4)
 
         r = ttk.Frame(g)
         r.pack(fill="x", padx=10, pady=(0, 10))
@@ -240,7 +256,7 @@ class App(tk.Tk):
                                                               padx=(24, 0))
         self.validate_note = ttk.Label(r, text="", foreground=WARN)
         self.validate_note.pack(side="left", padx=8)
-        for v in (self.from_month, self.from_year, self.to_month,
+        for v in (self.lag_months, self.to_month,
                   self.to_year):
             v.trace_add("write", lambda *_a: self._describe_window())
 
@@ -302,10 +318,13 @@ class App(tk.Tk):
                                     wraplength=1120, justify="left")
         self.month_note.pack(anchor="w", padx=10, pady=(0, 6))
 
+        # Fixed height rather than expanding. It holds a handful of paths and
+        # only at the very end of a run, so letting it grow into every spare
+        # pixel pushed the log - which is live throughout - out of sight.
         tf = ttk.Frame(g3)
-        tf.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        tf.pack(fill="x", expand=False, padx=10, pady=(0, 10))
         self.files = ttk.Treeview(tf, columns=("f",), show="headings",
-                                  height=5)
+                                  height=4)
         self.files.heading("f", text="Written")
         self.files.column("f", width=1000, anchor="w")
         sb = ttk.Scrollbar(tf, command=self.files.yview)
@@ -496,11 +515,15 @@ class App(tk.Tk):
             ttk.Button(r, text="…", width=3, command=cmd).pack(side="left")
             ttk.Label(r, text=hint, foreground=MUTED,
                       width=36).pack(side="left", padx=6)
+            # Directly under each, because the wrong file in either is
+            # silent everywhere else - the run builds no search areas and
+            # says nothing about why.
             if var is self.register_file:
-                # Directly under the field, because a wrong file here is
-                # silent everywhere else.
                 self.register_note = ttk.Label(g, text="", foreground=MUTED)
                 self.register_note.pack(anchor="w", padx=(140, 0))
+            if var is self.mills_file:
+                self.mills_note = ttk.Label(g, text="", foreground=MUTED)
+                self.mills_note.pack(anchor="w", padx=(140, 0))
         ttk.Label(g, text="Both are filled in from the drop when you choose "
                           "one on the first tab.",
                   foreground=MUTED).pack(anchor="w", padx=10, pady=(2, 0))
@@ -857,6 +880,54 @@ class App(tk.Tk):
                         "{:.0f}%".format(100 * share),
                         supply_stage._explain(kind)))
 
+    def _say_packaged(self, note, finder, label):
+        """What will be used when a field is left empty."""
+        try:
+            p = finder(self.cfg)
+            with open(p, encoding="utf-8-sig") as fh:
+                rows = max(0, sum(1 for _ in fh) - 1)
+            note.config(text="using the packaged {} — {} row(s)".format(
+                label, rows), foreground=MUTED)
+        except Exception:
+            note.config(text="using the packaged {}".format(label),
+                        foreground=MUTED)
+
+    def _check_mills(self):
+        """Say which mill locations file will be used, and how complete it is.
+
+        A supplier with no location gets no search area at all, so the count
+        that matters is not how many rows the file has but how many of them
+        can actually place a mill.
+        """
+        import csv as _csv
+        path = self.mills_file.get().strip()
+        if not path:
+            path = reference_mod.mills(self.cfg)
+            where = "the packaged file"
+        elif not os.path.isfile(path):
+            self.mills_note.config(text="that file is not there",
+                                   foreground=BAD)
+            return
+        else:
+            where = os.path.basename(path)
+        try:
+            rows = list(_csv.DictReader(open(path, encoding="utf-8-sig")))
+        except Exception as exc:
+            self.mills_note.config(
+                text="could not read it: {}".format(str(exc)[:60]),
+                foreground=BAD)
+            return
+        placed = sum(1 for r in rows
+                     if str(r.get("latitude") or "").strip()
+                     or str(r.get("district_code") or "").strip())
+        blank = len(rows) - placed
+        self.mills_note.config(
+            text="{} — {} of {} supplier(s) can be placed{}".format(
+                where, placed, len(rows),
+                ", {} cannot and will get no search area".format(blank)
+                if blank else ""),
+            foreground=WARN if blank > len(rows) / 3 else MUTED)
+
     def _check_register(self):
         """Say straight away whether this file is a register.
 
@@ -869,8 +940,8 @@ class App(tk.Tk):
         """
         path = self.register_file.get().strip()
         if not path:
-            self.register_note.config(
-                text="using the packaged register", foreground=MUTED)
+            self._say_packaged(self.register_note, reference_mod.register,
+                               "supplier register")
             return
         if not os.path.isfile(path):
             self.register_note.config(text="that file is not there",
@@ -910,6 +981,7 @@ class App(tk.Tk):
     def pick_mills(self):
         self._ask(self.mills_file, "Mill locations",
                   filetypes=[("CSV", "*.csv"), ("All", "*.*")])
+        self._check_mills()
 
     def pick_library(self):
         self._ask(self.library_dir, "The library", "dir")
@@ -924,22 +996,15 @@ class App(tk.Tk):
                   filetypes=[("Excel", "*.xlsx"), ("All", "*.*")])
 
     def set_month(self, back):
-        """A window ending this month and reaching back `back` months."""
+        """Declare for the month `back` months before this one."""
         t = date.today()
         y, m = t.year, t.month - back
         while m < 1:
             m += 12
             y -= 1
-        self.from_year.set(str(y))
-        self.from_month.set("{:02d}".format(m))
-        self.to_year.set(str(t.year))
-        self.to_month.set("{:02d}".format(t.month))
-        self.lib_month.set("{}-{:02d}".format(t.year, t.month))
-
-    def clear_month(self):
-        for v in (self.from_month, self.from_year, self.to_month,
-                  self.to_year):
-            v.set("")
+        self.to_year.set(str(y))
+        self.to_month.set("{:02d}".format(m))
+        self.lib_month.set("{}-{:02d}".format(y, m))
 
     def _describe_validate(self):
         """Say what skipping the check costs, at the moment it is ticked."""
@@ -951,13 +1016,14 @@ class App(tk.Tk):
         start, end = self._window()
         if not (start and end):
             self.window_note.config(
-                text="blank stops after the split — nothing declarable",
+                text="pick a month — without one a run stops after the split "
+                     "and nothing is declarable",
                 foreground=MUTED)
             return
         months = self._months_in_window()
         self.window_note.config(
-            text="{} to {}   ·   declares for {}   ·   {} month(s)".format(
-                start, end, self._declared_month(), months),
+            text="searches {} to {}  ·  declares for {}  ·  {} month(s) of "
+                 "ground".format(start, end, self._declared_month(), months),
             foreground=MUTED)
 
     def _declared_month(self):
@@ -965,27 +1031,27 @@ class App(tk.Tk):
         y, m = self.to_year.get().strip(), self.to_month.get().strip()
         return "{}-{}".format(y, m) if y and m else ""
 
-    def _months_in_window(self):
+    def _lag(self):
         try:
-            a = int(self.from_year.get()) * 12 + int(self.from_month.get())
-            b = int(self.to_year.get()) * 12 + int(self.to_month.get())
-            return max(0, b - a + 1)
-        except ValueError:
-            return 0
+            return max(0, int(self.lag_months.get()))
+        except (ValueError, TypeError):
+            return run_stage.LAG_MONTHS
+
+    def _months_in_window(self):
+        return self._lag() + 1 if self._declared_month() else 0
 
     def _window(self):
-        """The first day of the from-month to the last day of the to-month."""
-        try:
-            fy, fm = int(self.from_year.get()), int(self.from_month.get())
-            ty, tm = int(self.to_year.get()), int(self.to_month.get())
-        except ValueError:
+        """The window for the declared month, from the same code the run uses.
+
+        Derived rather than entered, and derived by calling `run._window` so
+        the window shown here is the window the run will use - two
+        implementations of this would be a way for the desktop window to
+        promise one period and the run to search another.
+        """
+        month = self._declared_month()
+        if not month:
             return "", ""
-        first = date(fy, fm, 1)
-        last = date(ty + (tm == 12), (tm % 12) + 1, 1) - timedelta(days=1)
-        if last < first:
-            # Backwards. Better to say nothing than to silently swap them.
-            return "", ""
-        return first.isoformat(), last.isoformat()
+        return run_stage._window(month, self._lag())
 
     # ──────────────────────────────────────────────────────── the work
 
@@ -1114,11 +1180,11 @@ class App(tk.Tk):
             return
         start, end = self._window()
         month = self._declared_month() if start else ""
-        if (self.from_month.get() or self.to_month.get()) and not start:
+        if (self.to_month.get() or self.to_year.get()) and not start:
             messagebox.showwarning(
-                "Check the window",
-                "Both a from and a to month, and the to must not be before "
-                "the from.")
+                "Check the month",
+                "Both a year and a month are needed to know what to declare "
+                "for.")
             return
 
         try:
@@ -1523,26 +1589,56 @@ class App(tk.Tk):
                 s = json.load(fh)
         except Exception:
             return
+        # The supplier register and mill locations are deliberately not
+        # restored. They ship with the package now, and these fields are
+        # overrides for the rare case where a different set is wanted.
+        #
+        # Remembering them was worse than useless: both were still pointing
+        # at what had been picked before the files moved inside the package -
+        # an old mill locations file without the coordinates added since, and
+        # a report about the suppliers in place of the register itself. The
+        # report reads perfectly well, reports that nobody needs a search
+        # area, and the run then builds none without a word.
+        #
+        # An override should be an act, not something inherited.
         for k, var in (("config", self.config_name), ("drop", self.drop_dir),
-                       ("register", self.register_file),
-                       ("mills", self.mills_file),
                        ("library", self.library_dir), ("who", self.who),
                        ("lots", self.lot_file),
                        ("deliveries", self.deliveries_file)):
             if s.get(k):
                 var.set(s[k])
+        # After the window has been laid out - a sash position set before
+        # then is measured against a window that has no size yet and lands
+        # somewhere arbitrary.
+        if s.get("sash"):
+            self.after(200, lambda: self._restore_sash(int(s["sash"])))
+
+    def _restore_sash(self, pos: int) -> None:
+        try:
+            if 100 < pos < self.winfo_height() - 100:
+                self.split.sashpos(0, pos)
+        except Exception:
+            pass
+
+    def _sash(self):
+        try:
+            return int(self.split.sashpos(0))
+        except Exception:
+            return 0
 
     def _close(self):
         try:
             with open(SETTINGS, "w", encoding="utf-8") as fh:
                 json.dump({"config": self.config_name.get(),
                            "drop": self.drop_dir.get(),
-                           "register": self.register_file.get(),
-                           "mills": self.mills_file.get(),
                            "library": self.library_dir.get(),
                            "who": self.who.get(),
                            "lots": self.lot_file.get(),
-                           "deliveries": self.deliveries_file.get()}, fh)
+                           "deliveries": self.deliveries_file.get(),
+                           # Where the divider was left, so the next run
+                           # opens the way it was set rather than snapping
+                           # back to the default.
+                           "sash": self._sash()}, fh)
         except Exception:
             pass
         self.destroy()

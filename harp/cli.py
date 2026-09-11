@@ -814,7 +814,26 @@ def cmd_lot(cfg, args) -> int:
 
     _log("")
     try:
-        deliveries = lots_stage.read_deliveries(args.deliveries, log=_log)
+        if args.deliveries:
+            # One file, named. Still supported: a lot that sits entirely
+            # within one month needs nothing else.
+            deliveries = lots_stage.read_deliveries(args.deliveries, log=_log)
+        else:
+            # The intake library. Walking back from when a lot finished can
+            # reach through several months of deliveries before the mass is
+            # covered, and reading one file made a large lot look short when
+            # the record simply was not there.
+            root = getattr(cfg.paths, "intake", "")
+            if not root or not os.path.isdir(root):
+                _log("no delivery record given and no intake library at "
+                     "{}".format(root or "(unset)"))
+                _log("  set paths.intake in the config, or pass "
+                     "--deliveries")
+                return 1
+            until = max((l.latest.strftime("%Y-%m") for l in all_lots),
+                        default="")
+            deliveries = lots_stage.read_intake(
+                root, until=until, submission=args.submission, log=_log)
     except Exception as exc:
         _log(str(exc))
         return 1
@@ -1601,8 +1620,12 @@ search areas nobody can declare.
                     help="a production lot list, or the drop folder holding "
                          "one")
     lt.add_argument("--deliveries",
-                    help="the load delivery summary. Found in the drop if "
-                         "you give a folder")
+                    help="one delivery record. Without it the intake library "
+                         "is read, across as many months as the walkback "
+                         "needs")
+    lt.add_argument("--submission", metavar="ID",
+                    help="a named submission, e.g. 2026-05-002. The latest "
+                         "in each month is used otherwise")
     lt.add_argument("--lot", help="one lot id, or several comma separated")
     lt.add_argument("--library", metavar="DIR",
                     help="the shelf, if not the configured one")

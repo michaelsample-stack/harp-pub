@@ -8,10 +8,149 @@ Newest first.
 
 | | |
 |---|---|
-| Version | 1.4 |
-| Date | 9 September 2026 |
+| Version | 1.6 |
+| Date | 11 September 2026 |
 
 Version increments whenever a decision is added or reversed.
+
+---
+
+## 11 September 2026 — Detection reaches back two months
+
+**Michael.** A chip delivered in May came from a log cut before May. The window
+searched only the declared month, which found harvest that had not been
+delivered yet and missed the harvest that fed the month.
+
+A May run now covers 1 March to 31 May. The window ends at the month's end
+rather than shifting wholesale, because some of what a month delivers really
+was cut within it.
+
+**Two months is a working assumption about turnaround, not a measurement.**
+Changeable in config. If a month's detections cluster at the very start of its
+window, it is too short.
+
+**The same block appearing in several months is correct.** A block cut in
+March feeds March, April and May deliveries. Each copy is tied to the
+deliveries that drew it in.
+
+---
+
+## 11 September 2026 — One detection, one feature
+
+**Michael, after seeing a month come back at 14,348 features from 3,254
+detections.** A detection falling inside several suppliers' areas was emitted
+once per area, and one inside both a registered block and a district was
+emitted at both tiers.
+
+**The weaker tier is dropped.** Knowing a harvest sits in a registered block
+already places it more tightly than a district can, and keeping both made the
+file contradict itself.
+
+**Where several suppliers are candidates, the largest by that month's tonnage
+is named and the rest are listed beside it**, with the source field saying in
+words that it is a ranking rather than an establishment.
+
+**Keeping one at random was considered and rejected.** Michael's own framing:
+it replaces "we do not know which of these four" with "it was this one",
+which looks certain and is wrong most of the time. Ranking by tonnage is also
+a guess, but a stated one with its reasoning attached.
+
+---
+
+## 11 September 2026 — Log delivery records
+
+**Harmac, on being asked for monthly timber marks.** Some suppliers send a
+scale return; others will get a spreadsheet made by hand. Both say which marks
+arrived and when.
+
+**A mark on a real arrival names a specific harvest**, so these resolve to a
+cut block and are finished. The first file carried nine marks, four of which
+were not in the supply register at all.
+
+**Log volume never enters the tonnage.** Those logs are chipped elsewhere and
+arrive again as chips; counting both would count the same wood twice. Cubic
+metres are carried as stated rather than converted - the factor varies by
+species and moisture, and a wrong one is worse than two units.
+
+**The reader looks for the facts rather than the layout**, so a new supplier's
+format is a line in a table rather than a new reader.
+
+---
+
+## 11 September 2026 — The monthly input library
+
+**Michael, adopting the layout the cloud deployment specifies.**
+`<intake>/YYYY-MM/<submission-id>/`, local or `gs://` with nothing else
+changing.
+
+**The submission id is for corrections**, not batching: a month arrives as
+-001 and a corrected month as -002, with the original left exactly as it was
+processed.
+
+**The library is read across months.** A lot walkback reaches back until the
+mass is covered, which can span several months of deliveries.
+
+---
+
+## 9 September 2026 — The month is what arrived, not what could have
+
+**Michael, after seeing the real monthly delivery records.** The pipeline had
+been taking its work from the supply source register: a July run resolved 217
+identifiers to declare a month in which 41 sources delivered.
+
+**The register is a master list**, not a work list. 159 of its 279 rows are
+log purchases that arrive back later as chips under a different source
+entirely, and most of it delivers nothing in a given month.
+
+**And the volume split is the fact that matters.** 71% of the fibre is
+residual chips bought from a sawmill, which carries no timber mark and never
+will. That is a ceiling, not a gap to be chased, and a month counted in
+features could not say so. Everything is now reported in bone-dry tonnes.
+
+**Own yard material is no longer resolved.** It arrived, but not from a
+forest this month, and declaring it double counted the wood that did.
+
+---
+
+## 9 September 2026 — Toll-chipped receipts resolve to their mark pool
+
+**Found in the register.** A chip receipt from DCT or Mid Island is the
+client's own logs coming back, and the register records where each log
+purchase was sent - "Direct Delivery MIDISL". That routing is the only link
+between a log purchase and the chips that come back from it.
+
+So the pool of blocks routed to a chipper becomes the search area for its
+receipts, narrowed by detection.
+
+**P2a, not a new tier.** Michael's own observation: this is the same shape as
+pulling a supplier's whole tenure and letting detection say which part moved.
+No new mechanism was needed - only a new way of assembling a search area.
+
+---
+
+## 9 September 2026 — Supplier declarations under one roof
+
+**Two suppliers declare their origins and neither does it the same way.** One
+exports GeoJSON with the boundary in it; the other prints a table of state
+permit numbers and scans it.
+
+Both are the same act, so there is one entry point and the readers sit under
+it. A declaration carrying geometry is taken at their word and is finished; a
+declaration carrying identifiers is resolved in a public register.
+
+**The scan is read by OCR, and nothing about it has to be trusted.** A permit
+that misreads will not resolve; one that resolves is right. Two independent
+checks come free: the register validates identifiers, and the printed total
+validates volumes.
+
+**Washington permits resolve.** Eighteen of twenty-one on one declaration, to
+fifty-four units, every one with an area. That was checked before building on
+it, against the actual numbers rather than a sample.
+
+**Which changes what 71% means.** Merchant residual is a ceiling where
+suppliers will not or cannot provide - not where nothing exists. One merchant
+supplier is voluntarily providing the equivalent of timber marks, and the
+large ones should be asked.
 
 ---
 
@@ -609,6 +748,20 @@ quietly fixed.
 
 | Date | What was wrong | Correction |
 |---|---|---|
+| 11 Sep | The lot walkback started from when a lot began | A lot can run for weeks and fibre arriving partway through went into it. It walks back from the finish now. |
+| 11 Sep | The walkback reversed a list that was no longer in date order | One delivery record is in date order; a pool of months is not. Reversing it walked forwards from the oldest, so every lot came back satisfied with an identical delivery count - which is what made it visible. |
+| 11 Sep | `describe` gained a fifth return value and one early return kept four | Species failed for a whole month and 79% of it came back estimated. The threshold warning is what caught it. |
+| 11 Sep | A species stage exception was caught alongside service failures | A `TypeError` in our code reported as "could not read species", which sounded like Earth Engine. It raises now. |
+| 11 Sep | Producer-declared areas had a species list but no dominant | They counted as a blank species name in the month's tally, which read as a raster class that could not be named. |
+| 11 Sep | Nothing checked that a delivery record belonged to the month being declared | A folder for one month run with another month's label produced a file named for the second and filled with the first. The run stops now. |
+| 11 Sep | `ProductionPlace` named the area rather than the harvest | Two and a half thousand features in one month carried the same string. |
+| 11 Sep | The prefetch covered the delivered sources and not the pooled ones | In a chip-heavy month most delivered identifiers are mill town names; the marks that matter are the pooled ones, and 131 were looked up one at a time. |
+| 9 Sep | The EUDR lamp was declared and never signalled | It sat grey through every run, reading as a stage that had not happened. |
+| 9 Sep | The toll-chipper pool swallowed its failures | Any exception per record was skipped with no count, so a register that stopped answering could take the whole pool and the run would say "0 added" without a reason. |
+| 9 Sep | Three constants had two copies each | `BRACKET_DAYS`, `MIN_SHARE`, `POINT_AREA_HA`, and two different implementations of `bracket()`. The point of filling a gap is that an estimated value reads exactly like an observed one; two copies of the number applying it is how that quietly stops being true. |
+| 9 Sep | Features dropped from the union in silence | A geometry that cannot be read is a smaller submission, and a smaller submission finds less - which looks like a quiet month rather than a fault. Counted now. |
+| 9 Sep | The district lookup could not tell an outage from a missing district | It tries three field names; if all three fail nothing was asked, and returning "no such district" would build a search area on a hole. |
+| 9 Sep | A prefetch of the tenure register halved failed batches while retrying each piece with backoff | It turned a short outage into hours of silent waiting. Replaced with a probe, one fallback level, and a retry that does not retry a malformed request. |
 | 9 Sep | The tenure register asked one identifier at a time, 663 requests a run, nothing cached | Batched into six, cached for a week. A first attempt at this halved each failed batch while retrying every piece with backoff, which turned a short outage into hours of silent waiting - replaced with one fallback level. |
 | 8 Sep | `ProducerName` set on only one of seven search area routes | 95% of a month reached the delivered view unnamed. Every route sets it now. |
 | 8 Sep | `harp_jurisdiction` unset on a second `named district` route | Fourteen features a month inherited no country, and the EUDR field fell back to the config default. Found by the guard added when the first instance was fixed. |

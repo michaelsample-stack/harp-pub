@@ -724,7 +724,13 @@ def remember(field: str, value: str, rows: list) -> None:
 
 
 def _lookup_once(where: str) -> tuple[list[dict], str]:
-    """Attributes for a where clause, one attempt, error as a string."""
+    """Attributes for a where clause, one attempt, error as a string.
+
+    Falls through to WFS the same way `attributes()` does. Without that, a
+    REST outage made every prefetch batch fail and the whole thing degrade to
+    one query per identifier - which is the cost the prefetch exists to
+    avoid, paid in full while the fallback sat unused one function away.
+    """
     try:
         data = _post_once(BLOCKS, {
             "where": where, "outFields": LOOKUP_FIELDS,
@@ -732,7 +738,13 @@ def _lookup_once(where: str) -> tuple[list[dict], str]:
             "f": "json"})
         return [f.get("attributes", {}) for f in data.get("features", [])], ""
     except Exception as exc:
-        return [], str(exc).splitlines()[0][:160]
+        try:
+            feats = wfs_query(where, geometry=False)
+            return [f.get("properties") or {} for f in feats], ""
+        except Exception:
+            # Both doors shut. The REST error is the more useful of the two
+            # to report - WFS is the fallback, not the thing that broke.
+            return [], str(exc).splitlines()[0][:160]
 
 
 def by_field(field: str, value: str, index=None) -> tuple[list[dict], str, str]:

@@ -601,6 +601,18 @@ def _producer_of(source: dict, name: str) -> tuple:
     v = str(name or "").strip()
     if v and v.upper() != str(source.get("code") or "").upper():
         return v, "the client's own name for this supplier"
+
+    # Only a code. The client buys from these and has not said who they are -
+    # COS, RYK, WWW and a few others, each carrying real tonnage.
+    #
+    # Naming the code is better than leaving it blank and much better than
+    # "Unknown": it says precisely what is missing and who can supply it, and
+    # it keeps the gap countable. A field full of "Unknown" tells a reader
+    # nothing they can act on.
+    code = str(source.get("code") or name or "").strip()
+    if code:
+        return ("Supplier {} (name not provided by the client)".format(code),
+                "only a purchasing code is known for this supplier")
     return "", ""
 
 

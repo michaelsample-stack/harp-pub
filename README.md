@@ -196,6 +196,15 @@ resolve, and what has been flagged and carried forward anyway.
 This is the last point at which the shape of a month can be reviewed before the
 numbers change.
 
+### The window a month searches
+
+A month searches the two months before it as well as itself. A May run covers
+1 March to 31 May and declares for May.
+
+A chip delivered in May came from a log cut before May. Searching only May
+finds harvest that has not been delivered yet and misses the harvest that fed
+the month. `lag_months` in config.
+
 ### 1b. What arrived
 
 The month's work comes from the delivery record, not the supply register. The
@@ -224,6 +233,18 @@ month.
 A scan is read by OCR, and nothing about it has to be trusted: a permit that
 misreads will not resolve, and one that resolves is right.
 
+### 3c. Log deliveries
+
+Which timber marks arrived, and when. A mark on a real arrival names a
+specific harvest, so these resolve to a cut block and are finished.
+
+Their volume is cubic metres of log rather than bone-dry tonnes of chip, and
+it never enters the month's tonnage: those logs are chipped elsewhere and
+arrive again later as chips.
+
+Read for the facts rather than the layout - which mark, when it came, how much
+- so a scale return and a hand-made spreadsheet both work.
+
 ### 7b. Harvest dates
 
 Every feature that can carry one gets `HarvestStartDate` and `HarvestEndDate`,
@@ -251,6 +272,17 @@ than by supplier.
 
 Every filled feature is marked `harp_estimated` and its basis says so. Above
 15% of a month the run says so loudly, because that is no longer filling gaps.
+
+### 6b. One detection, one feature
+
+A detection can fall inside several suppliers' search areas at once, and
+inside a registered block and a district at the same time. It appears once,
+under the strongest area that contained it.
+
+Where several suppliers are candidates, the largest by that month's tonnage is
+named and the rest are listed on `harp_producer_candidates`, with
+`harp_producer_source` saying in words that it is a ranking rather than an
+establishment. Those fields are absent where there was only one candidate.
 
 ### 7. Validate and stage
 
@@ -417,6 +449,20 @@ make an outage permanent.
 that matters - a blip on the first rung once demoted a cut block to a district
 envelope, which is a wrong answer wearing the shape of a right one.
 
+## The monthly input library
+
+    <intake>/YYYY-MM/<submission-id>/
+
+`paths.intake` in config - a local path or a `gs://` one, with nothing else
+changing.
+
+**The submission id is for corrections.** A month arrives as `-001`, and a
+corrected month arrives as `-002` with the original left exactly as it was
+processed. The latest is used unless `--submission` names one.
+
+A lot walkback reads across months from here: reaching back until the mass is
+covered can span several months of deliveries.
+
 ## Reference data
 
 Four files ship inside the package and are used unless something else is
@@ -528,11 +574,11 @@ its state so that a file moved out of context still explains itself.
 
 ## Documentation
 
-`docs/HARP_Design_v1_0_0.md`
+`docs/HARP_Design_v1_1_0.md`
 
 Detailed description of the pipeline, resolution methods, precision tiers, and processing workflow.
 
-`docs/HPA1_Decisions_Log_v1_5.md`
+`docs/HPA1_Decisions_Log_v1_6.md`
 
 Record of significant design decisions, including the date, rationale, and any later reversals.
 

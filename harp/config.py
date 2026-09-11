@@ -29,6 +29,11 @@ class Paths:
     outbox: str           # finished GeoJSON / sce_base rows
     rejects: str          # anything the pipeline refused
     manifest: str         # run log
+    # The monthly input library: <intake>/YYYY-MM/<submission-id>/. Read
+    # across months by the lot walkback, which can reach back several months
+    # before a lot's mass is covered. Last because it has a default: a run
+    # works from a single drop folder without it.
+    intake: str = ""
 
 
 @dataclass
@@ -84,6 +89,13 @@ def load(name_or_path: str, repo_root: Path | None = None) -> Config:
         outbox=_expand(p.get("outbox", "./data/outbox"), repo_root),
         rejects=_expand(p.get("rejects", "./data/rejects"), repo_root),
         manifest=_expand(p.get("manifest", "./data/manifest"), repo_root),
+        # A gs:// path is left as it is - only a local one needs expanding
+        # against the repository root.
+        intake=(p.get("intake", "")
+                if str(p.get("intake", "")).startswith(("gs://", "s3://",
+                                                        "http"))
+                else _expand(p.get("intake", "./data/intake/monthly"),
+                             repo_root)),
     )
 
     bq_raw = data.get("bigquery", {}) or {}

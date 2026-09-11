@@ -478,7 +478,11 @@ def describe(hist: dict, table, min_share: float = MIN_SHARE) -> tuple:
             continue
         counts[code] = counts.get(code, 0.0) + n
     if not counts:
-        return "", "", [], 0
+        # Five values, like every other return here. This one was missed when
+        # the nameless-class count was added, and it cost a whole month of
+        # species - every feature fell through to neighbour estimation and
+        # 79% of the month came back estimated.
+        return "", "", [], 0, {}
 
     total = sum(counts.values())
     pcts = {c: n / total * 100.0 for c, n in counts.items()}
@@ -488,16 +492,34 @@ def describe(hist: dict, table, min_share: float = MIN_SHARE) -> tuple:
     kept_total = sum(kept.values())
     ordered = sorted(kept.items(), key=lambda kv: -kv[1])
 
-    parts, structured = [], []
+    # A class the raster carries and its own table names with an empty
+    # string. Not a lookup failure - species_name returns "class 47" for a
+    # code it does not know - but a published name that is blank.
+    #
+    # Such a class is dropped rather than shipped nameless or given a
+    # placeholder. A placeholder reads as a species and is not one; dropping
+    # it means the feature is short of species, and if that leaves nothing at
+    # all the feature has no species and the gaps stage estimates it from
+    # neighbours - which is a real answer rather than a label for a hole.
+    parts, structured, nameless = [], [], {}
+    usable = [(c, p) for c, p in ordered
+              if str(species_name(c, table)[0] or "").strip()]
     for code, pct in ordered:
+        if (code, pct) not in usable:
+            nameless[code] = round(pct, 1)
+    if not usable:
+        return "", "", [], 0, nameless
+
+    kept_total = sum(p for _c, p in usable)
+    for code, pct in usable:
         name, genus, sp, hs = species_name(code, table)
         share = round(pct / kept_total * 100.0, 1)
         parts.append("{} {:.0f}%".format(name, share))
         structured.append({"CommonName": name, "Genus": genus, "Species": sp,
                            "HSCode": hs, "ClassCode": code,
                            "ProportionPct": share})
-    return (species_name(ordered[0][0], table)[0], "; ".join(parts),
-            structured, int(total))
+    return (species_name(usable[0][0], table)[0], "; ".join(parts),
+            structured, int(total), nameless)
 
 
 def us_image(asset: str, log=print) -> tuple:
@@ -655,6 +677,10 @@ def apply(features: list[dict], cfg, log=print) -> tuple:
                 results[us[local]] = (hist, table, "", label)
 
     done, empty = 0, 0
+    # Classes the raster carries and its own table names with an
+    # empty string. Counted and named, because a class we cannot
+    # name is worth knowing about rather than quietly dropping.
+    unnamed: dict = {}
     for i, f in enumerate(features):
         p = f["properties"]
         why = p.pop("_why_year", "")
@@ -666,11 +692,17 @@ def apply(features: list[dict], cfg, log=print) -> tuple:
                 empty += 1
             continue
         hist, table, year, source = results[i]
-        dominant, readable, structured, pixels = describe(
+        dominant, readable, structured, pixels, nameless = describe(
             hist, table, opts["min_share"])
+        for code, share in (nameless or {}).items():
+            unnamed[code] = unnamed.get(code, 0) + 1
         if not dominant:
             p["harp_species_basis"] = (
-                "{} pixel(s) read but none carried a species".format(pixels))
+                "{} pixel(s) read but none carried a species{}".format(
+                    pixels,
+                    " - {} had no published name".format(
+                        ", ".join("class {}".format(c) for c in nameless))
+                    if nameless else ""))
             empty += 1
             continue
         _geom, circle_ha = read_geometry(f)
@@ -691,6 +723,16 @@ def apply(features: list[dict], cfg, log=print) -> tuple:
                                                              len(features)))
     if empty:
         log("  {:,} returned no usable pixels".format(empty))
+    if unnamed:
+        # Named, because a class the raster carries and its table does not
+        # name is a fault in the published asset, and the only way to find
+        # out which class it is, is to say so.
+        log("  {} class(es) the raster carries with no published name, "
+            "dropped from the mix:".format(len(unnamed)))
+        for code, n in sorted(unnamed.items(), key=lambda kv: -kv[1]):
+            log("    class {:<6}on {:,} feature(s)".format(code, n))
+        log("    Features left with nothing are estimated from neighbours "
+            "like any other gap.")
     if skipped:
         log("  {:,} had no usable geometry".format(skipped))
 

@@ -7,6 +7,17 @@ client: harmac
 environment: prd
 
 paths:
+  # The monthly input library. One folder per month, one folder per
+  # submission inside it - a month arrives as -001, and a corrected month
+  # arrives as -002 with the original left exactly as it was processed.
+  #
+  #     <intake>/2026-05/2026-05-001/
+  #
+  # A lot walkback reads across months from here: walking back from when a
+  # lot finished can reach through several months of deliveries before the
+  # mass is covered. Set it to a gs:// path in the cloud and nothing else
+  # changes.
+  intake: ./data/intake/monthly
   inbox:    gs://ngis-harmac-tms-prd-uswe1-harp/inbox
   staging:  gs://ngis-harmac-tms-prd-uswe1-harp/staging
   outbox:   gs://ngis-harmac-tms-prd-uswe1-harp/outbox
@@ -138,6 +149,17 @@ sources:
       require_start: true
 
   detection:
+    # How far before the declared month detection looks.
+    #
+    # A chip delivered in May came from a log cut before May. Searching only
+    # May finds harvest that has not been delivered yet and misses what fed
+    # the month. The window reaches back this many months and still ends at
+    # the month's end, because some of what a month delivers really was cut
+    # within it.
+    #
+    # Two is a working assumption about turnaround, not a measurement. If a
+    # month's detections cluster at the very start of its window, raise it.
+    lag_months: 2
     mode: unset
 
   supplier_file:

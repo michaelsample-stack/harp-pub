@@ -4,11 +4,232 @@ The version lives in `pyproject.toml` and `harp/__init__.py`. This file records
 what changed and why; it does not assert a version of its own, because a third
 place to update is a third place to forget.
 
-Documents version separately. `docs/HARP_Design_v1_0_0.md` and
-`docs/HPA1_Decisions_Log_v1_5.md` carry their own numbers and are not expected
+Documents version separately. `docs/HARP_Design_v1_1_0.md` and
+`docs/HPA1_Decisions_Log_v1_6.md` carry their own numbers and are not expected
 to match the package.
 
 ---
+
+## 0.35.x — a class with no name, and a list printed before it was tidied
+
+**A class the raster carries and its own table names with an empty string.**
+Not a lookup failure - an unknown code becomes "class 47" - but a published
+name that is blank, which reached a real month on 31 features.
+
+Such a class is now dropped from the mix and the rest reweighted. A
+placeholder was considered and rejected: it reads as a species and is not
+one. Where dropping it leaves a feature with nothing, the feature has no
+species and the gaps stage estimates it from neighbours - which is a real
+answer rather than a label for a hole.
+
+The classes are named in the log with a count, because a class the raster
+carries and its table does not name is a fault in the published asset and
+saying which one is the only way to find out.
+
+**And the written-file list is deduplicated before it is printed** rather than
+after. The fix was there but sat below the loop that prints it, so the
+returned value was right and the log still showed the month file twice.
+
+## Documentation, as of 11 September 2026
+
+`docs/HARP_Design_v1_1_0.md` and `docs/HPA1_Decisions_Log_v1_6.md`, with the
+README beside them. All three describe what HARP does now, after four clean
+monthly runs.
+
+The design document gained the detection window, one-feature-per-detection,
+log delivery records, the monthly input library, and the corrections to
+ProductionPlace and the lot walkback. Its section letters were also put back
+into reading order, having drifted through successive insertions.
+
+## 0.35.x — the intake library, and three lot walkback faults
+
+**The monthly input library gets the layout the cloud deployment specifies:**
+
+    <intake>/YYYY-MM/<submission-id>/
+
+`paths.intake` in config, `./data/intake/monthly` locally and a `gs://` path
+in the cloud, with nothing else changing. The submission id is for
+corrections: a month arrives as -001, and a corrected month arrives as -002
+with the original left exactly as it was processed. The latest is used unless
+one is named with `--submission`.
+
+### Three faults in the walkback
+
+**It walked back from when a lot started.** A lot can run for weeks - one ran
+for seventy days - and fibre arriving partway through went into it. Starting
+from the beginning excluded everything delivered during production. It now
+walks back from when the lot finished.
+
+**It read one delivery record.** Walking back from the finish date until the
+mass is covered can reach through several months, and with one file a large
+lot came back short - not because it was, but because the record was not
+there. It now reads across the intake library.
+
+**And it reversed a list that was no longer in date order.** One delivery
+record is in date order and reversing it walked backwards correctly; a pool
+of several months is in whatever order the months were read, and reversing
+that walked forwards from the oldest. Every lot came back satisfied from the
+start of the year, with identical delivery counts - which is what made it
+visible. It sorts before it walks now.
+
+**A CSV delivery record is also readable**, which two months of the year
+needed.
+
+Log delivery records are deliberately not read here. Those logs are the same
+wood that arrives later as chips, and counting both would satisfy a lot twice
+over.
+
+## 0.34.x — log deliveries
+
+The chip delivery record says how much fibre arrived. It does not say which
+harvest it came from, because a chip carries no mark - which is why most of a
+month resolves to a search area.
+
+A log delivery record says the other half: **which marks arrived, and when**.
+A mark on a real arrival names a specific harvest, so these resolve to a cut
+block and are finished. The first such file carried nine marks, four of which
+were not in the supply register at all.
+
+**Two records of two different things, and neither replaces the other.** Log
+arrivals never enter the tonnage arithmetic: those logs are chipped elsewhere
+and arrive again later as chips, and counting both would count the same wood
+twice. Their volume is cubic metres of log against bone-dry tonnes of chip,
+carried as stated rather than converted - the factor varies by species and
+moisture, and a wrong one is worse than two units side by side.
+
+**More than one format will arrive**, because some suppliers export a scale
+return from their system and others will send a spreadsheet somebody typed.
+The reader looks for the three facts - which mark, when it came, how much -
+rather than the layout, and a new supplier's spelling is a line in a table
+rather than a new reader. Tested against both shapes.
+
+**And DCT Chambers was 300 km inland.** The mill file had matched the
+company's head office in Vernon rather than the operation the register's own
+routing names, so DCT's chip deliveries were searching the Okanagan for
+harvest that came off Vancouver Island. Now Ladysmith.
+
+## 0.33.x — the four fields identify something
+
+Validation on a real month reported 2,485 duplicate ProductionPlace, 440
+missing, and 291 missing ProducerName. All three had the same root: the fields
+described the area a detection was found in rather than the detection.
+
+**ProductionPlace now identifies one harvest.** A timber mark is used as it
+stands - it already names a specific cut. Everything else is built from where
+it is and which harvest it is: `DCR-202605-0007`, the seventh harvest found in
+that district that month. The district name stays on `harp_key_name`.
+
+A field meant to identify a place that names the same place two thousand times
+identifies nothing.
+
+**And a bare supplier code is now named rather than left blank.** The client
+buys under codes it has not explained - COS, RYK, WWW - each carrying real
+tonnage, and every detection in their search areas inherited an empty
+producer.
+
+    Supplier RYK (name not provided by the client)
+
+Better than blank and much better than "Unknown": it says precisely what is
+missing and who can supply it, and it keeps the gap countable. A real name
+still wins wherever there is one.
+
+## 0.32.x — one feature per detection, with the uncertainty on it
+
+**And one tier per detection.** A detection inside a registered cut block is
+usually inside somebody's district as well, and both were emitted: the same
+ground appearing twice, once as a harvest attributable to the tenure holder
+and once as an inferred find in a district, sometimes naming two different
+suppliers.
+
+The weaker claim adds nothing - knowing a harvest sits in a registered block
+already places it more tightly than a district can - so a detection now
+appears once, under the strongest area that contained it. On one real month
+that was 421 features, and more to the point it stops the file contradicting
+itself.
+
+Things resolved from an identifier pass through untouched. They are not
+detections and do not compete: two registered blocks can legitimately share a
+boundary.
+
+
+A detection can fall inside several suppliers' search areas at once - two
+sawmills in one natural resource district, and nothing says which of them cut
+that patch. The pipeline emitted a copy per area, which quadrupled a month:
+**3,254 detections became 14,348 features**, most of them the same polygon
+under different names.
+
+**One feature now, and the uncertainty recorded rather than removed.** Where
+one area contains a detection, its supplier is named as before. Where several
+do:
+
+    ProducerName              Sierra Pacific Industries
+    harp_producer_source      the largest of 4 candidate(s) by this month's
+                              delivered tonnage - not established as the
+                              producer of this area
+    harp_producer_candidates  Sierra Pacific 7,512 BDT; Willis 5,660;
+                              Manke 4,652; Aspen 1,991
+    harp_producer_count       4
+
+The candidate fields are absent where one supplier's area contained it and no
+judgement was needed, so a reader can tell the firm rows from the ranked ones
+at a glance.
+
+**The alternative considered was keeping one at random.** That replaces "we do
+not know which of these four" with "it was this one" - which looks certain and
+is wrong most of the time. Ranking by tonnage is also a guess, but it is a
+stated guess with its reasoning attached and its alternatives beside it.
+
+**And declared areas now take their jurisdiction from their geometry.** They
+arrived with none, so the EUDR country field fell back to whatever the config
+said - right for a BC producer by luck, wrong the first time a US one
+declares.
+
+## 0.31.x — the window reaches back, and the delivery path actually runs
+
+**The prefetch was looking at the wrong half of the month.** It covered the
+delivered sources and not the pooled ones - and in a chip-heavy month most of
+a delivered source's identifier is a mill town name that was never going to
+match a timber mark. The marks that matter are the pooled ones, the logs sent
+out for chipping, and 131 of those were being looked up one at a time.
+
+It now takes both sets.
+
+**And a prefetch batch had no fallback to WFS.** `attributes()` fell through
+when the REST service failed; the batch path did not, so a REST outage made
+every batch fail and the whole thing degrade to one query per identifier -
+paying in full the cost the prefetch exists to avoid, with the fallback
+sitting unused one function away.
+
+
+**Detection now searches the two months before the declared month as well as
+the month itself.** A chip delivered in May came from a log cut before May -
+felled, hauled, chipped, delivered - so searching only May found harvest that
+had not been delivered yet and missed the harvest that fed the month. Wrong
+ground twice over.
+
+The window ends at the month's end rather than shifting wholesale, because
+some of what a month delivers really was cut within it. `lag_months` in
+config; two is a working assumption about turnaround rather than a
+measurement, and if a month's detections cluster at the start of its window
+it is too short.
+
+The desktop window now asks which month to declare and how far back to look,
+and shows the window that follows - it no longer takes a start and an end,
+which was a way to declare for a period nobody asked about. It calls the same
+`_window` the run uses, so what it shows is what will be searched.
+
+**And the delivery-driven month had never actually run.** Two mistakes in the
+same block - a module used without being imported, and a variable used before
+it existed - meant every month fell back to resolving the whole register. The
+handler caught both alongside genuine file problems and reported "could not
+read the delivery record", which sounded like the client's fault.
+
+Both fixed. The handler now lets a programming mistake through rather than
+dressing it as bad input, and a real fallback says plainly that the month
+will be far larger than it should be.
+
+Found by a review, not by us. There are tests now that exercise the path
+rather than its parts: removing the import fails them.
 
 ## 0.30.x — documentation brought up to date
 
@@ -411,7 +632,7 @@ makes the declaration.
 ## 0.12.x and earlier
 
 Catchments, the supplier alias table, the US routes, and the BC resolver ladder.
-See `docs/HPA1_Decisions_Log_v1_5.md` for the reasoning behind each, with dates
+See `docs/HPA1_Decisions_Log_v1_6.md` for the reasoning behind each, with dates
 and reversals.
 
 ---

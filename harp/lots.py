@@ -58,6 +58,8 @@ eleven times too deep and still look plausible.
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -193,6 +195,89 @@ def read_lots(path: str, log=print) -> list[Lot]:
     return lots
 
 
+def intake_months(root: str) -> list[tuple]:
+    """Every month in the intake library, newest first.
+
+    The layout is the one the cloud deployment specifies:
+
+        <intake>/YYYY-MM/<submission-id>/
+
+    A submission id exists for corrections: a month arrives once as -001, and
+    a corrected month arrives as -002 with the original left exactly as it
+    was processed. The latest is used unless one is named.
+
+    Returns [(month, folder), ...].
+    """
+    out = []
+    if not root or not os.path.isdir(root):
+        return out
+    for name in sorted(os.listdir(root), reverse=True):
+        if not re.match(r"^\d{4}-\d{2}$", name):
+            continue
+        month_dir = os.path.join(root, name)
+        if not os.path.isdir(month_dir):
+            continue
+        subs = sorted((d for d in os.listdir(month_dir)
+                       if os.path.isdir(os.path.join(month_dir, d))),
+                      reverse=True)
+        out.append((name, os.path.join(month_dir, subs[0]) if subs
+                    else month_dir))
+    return out
+
+
+def read_intake(root: str, until: str = "", submission: str = "",
+                log=print) -> list[dict]:
+    """Every delivery in the intake library, newest month first.
+
+    A lot is satisfied by walking back from when it finished until the mass
+    is covered, and a large lot can reach back through several months of
+    deliveries. So the walkback reads the library rather than one file -
+    which is what the library is for.
+
+    `until` as YYYY-MM stops at that month; nothing delivered after a lot was
+    made can have gone into it. `submission` names one instead of taking the
+    latest.
+    """
+    loads, months = [], []
+    for month, folder in intake_months(root):
+        if until and month > until:
+            continue
+        if submission:
+            named = os.path.join(os.path.dirname(folder), submission)
+            if os.path.isdir(named):
+                folder = named
+        found = [os.path.join(folder, f) for f in sorted(os.listdir(folder))
+                 if _is_delivery(f)]
+        for path in found:
+            try:
+                got = read_deliveries(path, log=lambda *_a: None)
+            except Exception as exc:
+                log("  {}: {}".format(os.path.basename(path),
+                                      str(exc).splitlines()[0][:80]))
+                continue
+            loads.extend(got)
+            months.append((month, len(got)))
+    if months:
+        log("{:,} delivery load(s) from {} month(s) of the intake "
+            "library".format(len(loads), len(months)))
+        log("  {}".format(", ".join("{} ({:,})".format(m, n)
+                                    for m, n in sorted(months))))
+    return loads
+
+
+def _is_delivery(name: str) -> bool:
+    """A chip delivery record, by its name.
+
+    Log delivery records are not included: those are logs arriving somewhere
+    to be chipped, and the same wood arrives again later as chips. Counting
+    both would satisfy a lot twice over.
+    """
+    low = name.lower()
+    if not low.endswith((".xlsx", ".xls", ".csv")):
+        return False
+    return "delivery" in low and "log" not in low
+
+
 def read_deliveries(path: str, log=print) -> list[dict]:
     """The load delivery record. Mass is bone-dry tonnes.
 
@@ -200,7 +285,12 @@ def read_deliveries(path: str, log=print) -> list[dict]:
     species split of that load.
     """
     import pandas as pd
-    d = pd.read_excel(path, header=0, skiprows=[1])
+    # Some months arrive as CSV and some as a workbook. Same columns, same
+    # second row of units to skip.
+    if str(path).lower().endswith((".csv", ".txt")):
+        d = pd.read_csv(path, header=0, skiprows=[1], low_memory=False)
+    else:
+        d = pd.read_excel(path, header=0, skiprows=[1])
     d = d.drop(columns=[c for c in d.columns if str(c).startswith("[#")],
                errors="ignore")
 
@@ -214,9 +304,15 @@ def read_deliveries(path: str, log=print) -> list[dict]:
             "no BDT column - GROSS is truck weight, not fibre, and is not a "
             "substitute")
 
+    # A workbook gives real timestamps; a CSV gives strings. The walkback
+    # compares dates, so they have to be dates either way.
+    d[date_col] = pd.to_datetime(d[date_col], errors="coerce")
+
     rows = []
     for _, r in d.iterrows():
         when = r.get(date_col)
+        if when is None or when != when:
+            continue
         try:
             bdt = float(r.get("BDT") or 0)
         except (TypeError, ValueError):
@@ -283,7 +379,14 @@ def chips_required(lot: Lot, f: dict) -> dict:
 def walk(lot: Lot, deliveries: list[dict], f: dict, log=None) -> Walk:
     """Back through the deliveries until twice the lot is covered.
 
-    From the earliest production time, on the reasoning that chips consumed on
+    From the moment the lot finished, reaching back until the mass is
+    covered. Not from when it started: a lot can run for weeks, and fibre
+    that arrived partway through went into it. Walking back from the start
+    would exclude everything delivered during production, which for a
+    seventy-day lot is most of it.
+
+    (Superseded reasoning, kept so the change is not silently re-reverted:
+    from the earliest production time, on the reasoning that chips consumed on
     the first day of a run must have arrived before it. For a lot that ran
     eleven days that is a materially earlier start than the last day, and it
     is the conservative end.
@@ -293,8 +396,14 @@ def walk(lot: Lot, deliveries: list[dict], f: dict, log=None) -> Walk:
     w = Walk(lot=lot, required_bdt=dict(need))
     got = {s: 0.0 for s in SPECIES}
 
-    before = [d for d in deliveries if d["when"] <= lot.earliest]
-    for d in reversed(before):          # newest first
+    # Sorted here rather than relying on the caller. One delivery record is
+    # in date order and reversing it walked backwards correctly; a pool of
+    # several months is in whatever order the months were read, and reversing
+    # that walked forwards from the oldest - which satisfied every lot from
+    # the start of the year and made them all look identical.
+    before = sorted((d for d in deliveries if d["when"] <= lot.latest),
+                    key=lambda d: d["when"], reverse=True)
+    for d in before:                    # newest first
         outstanding = [s for s in SPECIES if got[s] < need[s] - 1e-9]
         if not outstanding:
             break

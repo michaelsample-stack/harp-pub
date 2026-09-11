@@ -221,8 +221,64 @@ def _index(features: list[dict]):
     return (STRtree(shapes) if shapes else None), shapes, keep
 
 
+def _supplier_of(feature: dict) -> str:
+    p = feature.get("properties") or {}
+    return str(p.get("harp_supplier_code") or p.get("harp_supplier")
+               or "").strip().upper()
+
+
+def _weight(feature: dict, weights) -> float:
+    """What this feature's supplier delivered this month, in bone-dry tonnes.
+
+    Zero where nothing is known, which puts a supplier with no delivery
+    behind one with any - the right way round, since a supplier who sent
+    nothing this month did not produce this month's harvest.
+    """
+    if not weights:
+        return 0.0
+    key = _supplier_of(feature)
+    if not key:
+        return 0.0
+    if key in weights:
+        return float(weights[key])
+    name = str((feature.get("properties") or {}).get("harp_supplier")
+               or "").strip().upper()
+    return float(weights.get(name, 0.0))
+
+
+def _candidate_list(feats_in, owners, weights) -> str:
+    """Every supplier whose area contains this, with the tonnage that ranked
+    them. Readable rather than structured, because it is meant to be read."""
+    parts = []
+    for i in owners:
+        p = feats_in[i].get("properties") or {}
+        name = (p.get("harp_supplier") or p.get("harp_supplier_code")
+                or "?").strip()
+        w = _weight(feats_in[i], weights)
+        parts.append("{} {:,.0f} BDT".format(name, w) if w
+                     else "{} (no delivery this month)".format(name))
+    return "; ".join(parts)
+
+
+def _candidate_source(n: int, weights, feats_in, owners) -> str:
+    """Why this producer was named, in words.
+
+    The name reads as a fact and it is a ranking. This is the sentence that
+    stops it being read as one.
+    """
+    best = _weight(feats_in[owners[0]], weights)
+    if best:
+        return ("the largest of {} candidate(s) by this month's delivered "
+                "tonnage - not established as the producer of this "
+                "area".format(n))
+    return ("one of {} supplier(s) whose search area contains this, none of "
+            "which delivered this month - not established as the producer of "
+            "this area".format(n))
+
+
 def enrich(tenure: list[dict], catchments: list[dict], detections: list[dict],
            start: date | None = None, end: date | None = None,
+           weights: dict | None = None,
            log=print) -> tuple[list[dict], list[dict], dict]:
     """B-prime and C-prime.
 
@@ -266,7 +322,29 @@ def enrich(tenure: list[dict], catchments: list[dict], detections: list[dict],
     # Both inputs are search areas. The detection is what is kept; the area
     # only says whose it was and what else is known about it.
     def attribute(parents, kind, tier, note, log_label):
-        """Emit each detection under every area that contains it."""
+        """One feature per detection, naming who it is most likely from.
+
+        A detection can fall inside several suppliers' search areas at once -
+        two sawmills in one natural resource district, and nothing says which
+        of them cut that particular patch.
+
+        The pipeline used to emit a copy per area. That was honest and it
+        quadrupled a month: 3,254 detections became 14,348 features, most of
+        them the same polygon under different names.
+
+        **One feature, and the uncertainty recorded rather than removed.**
+        Where one area contains a detection, its supplier is named as before.
+        Where several do, the largest by the month's delivered tonnage is
+        named, the source field says in words that it is a guess among
+        candidates, and every candidate is listed with the tonnage that
+        decided it.
+
+        The alternative considered was keeping one at random. That replaces
+        "we do not know which of these four" with "it was this one", which
+        looks certain and is wrong most of the time. Ranking by tonnage is
+        also a guess, but it is a stated guess with its reasoning attached
+        and its alternatives beside it - anyone can see it and disagree.
+        """
         if not parents:
             return [], 0
         from shapely.strtree import STRtree
@@ -291,11 +369,14 @@ def enrich(tenure: list[dict], catchments: list[dict], detections: list[dict],
                 continue
             if len(owners) > 1:
                 shared += 1
-            for i in owners:
-                # Every area containing this detection gets its own copy.
-                # Merging them would lose which supplier the harvest should be
-                # declared against, which is the only reason for any of this.
+                # Most likely first, by what that supplier delivered this
+                # month. A supplier who sent seven thousand tonnes is a
+                # better guess than one who sent thirty - not a good guess,
+                # but the best available and an explicable one.
+                owners.sort(key=lambda i: -_weight(feats_in[i], weights))
+            for i in owners[:1]:
                 p = feats_in[i].get("properties") or {}
+                others = [feats_in[j] for j in owners[1:]]
                 out.append({"type": "Feature", "geometry": d["geometry"],
                             "properties": {
                     "harp_supplier": p.get("harp_supplier", ""),
@@ -314,7 +395,18 @@ def enrich(tenure: list[dict], catchments: list[dict], detections: list[dict],
                     # tenure block belongs to whoever held that tenure.
                     "ProducerName": p.get("ProducerName", ""),
                     "harp_producer_number": p.get("harp_producer_number", ""),
-                    "harp_producer_source": p.get("harp_producer_source", ""),
+                    "harp_producer_source": (
+                        _candidate_source(len(owners), weights, feats_in,
+                                          owners)
+                        if len(owners) > 1
+                        else p.get("harp_producer_source", "")),
+                    # Only where there was a choice. Its absence means one
+                    # supplier's area contained this and no judgement was
+                    # needed, which is worth being able to tell at a glance.
+                    "harp_producer_candidates": (
+                        _candidate_list(feats_in, owners, weights)
+                        if len(owners) > 1 else ""),
+                    "harp_producer_count": len(owners),
                     "harp_district": p.get("harp_district", ""),
                     "harp_parent_kind": p.get("harp_geometry_kind", ""),
                     "harp_parent_area_ha": p.get("harp_area_ha", ""),
@@ -339,8 +431,9 @@ def enrich(tenure: list[dict], catchments: list[dict], detections: list[dict],
         log("{:,} detection(s) attributed within {:,} {}".format(
             len(out), len(shapes), log_label))
         if shared:
-            log("  {:,} fell inside more than one and are attributed to "
-                "each".format(shared))
+            log("  {:,} fell inside more than one supplier's area. Each is "
+                "named for the largest by this month's tonnage, with the "
+                "others listed on harp_producer_candidates.".format(shared))
         return out, shared
 
     # A parcel carries a mark from the client's own delivery record, so a
@@ -388,9 +481,29 @@ def enrich(tenure: list[dict], catchments: list[dict], detections: list[dict],
     return b_prime, c_prime, report
 
 
+# Strongest first. A detection is attributed against every kind of area it
+# falls inside, and the same patch of ground can sit in a titled parcel, a
+# tenure block and a district all at once.
+TIER_RANK = {"P1a": 0, "P1b": 1, "P1c": 1, "P1d": 1,
+             "P2a": 2, "P2b": 2, "P3a": 3, "P3b": 3, "P4": 4}
+
+
 def merge(harvest: list[dict], b_prime: list[dict],
-          c_prime: list[dict]) -> list[dict]:
-    """One collection for the month, with every feature saying what it rests on."""
+          c_prime: list[dict], log=None) -> list[dict]:
+    """One collection for the month, each detection at its strongest tier.
+
+    A detection inside a registered cut block is usually inside somebody's
+    district as well, and it used to be emitted for both: once as a harvest
+    attributable to the tenure holder, once as an inferred find in a district.
+    The same ground, two claims of different strength, sometimes naming two
+    different suppliers - and the weaker claim adds nothing, because knowing
+    a harvest sits in a registered block already places it more tightly than
+    a district can.
+
+    So a detection appears once, under the strongest area that contained it.
+    Everything resolved from an identifier passes through untouched: those are
+    not detections and do not compete.
+    """
     out = []
     for f in harvest:
         p = dict(f.get("properties") or {})
@@ -399,9 +512,37 @@ def merge(harvest: list[dict], b_prime: list[dict],
         p.setdefault("harp_detected", False)
         out.append({"type": "Feature", "geometry": f["geometry"],
                     "properties": p})
-    out.extend(b_prime)
-    out.extend(c_prime)
+
+    best, dropped = {}, 0
+    for f in list(b_prime) + list(c_prime):
+        p = f.get("properties") or {}
+        # The detection itself, not the area it was found in. Two features
+        # for one detection have identical geometry and date and differ only
+        # in what they were attributed against.
+        key = (_geom_key(f.get("geometry")), p.get("harp_detected_first", ""))
+        rank = TIER_RANK.get(p.get("harp_tier"), 9)
+        if key not in best:
+            best[key] = (rank, f)
+        elif rank < best[key][0]:
+            best[key] = (rank, f)
+            dropped += 1
+        else:
+            dropped += 1
+    out.extend(f for _r, f in best.values())
+    if dropped and log:
+        log("  {:,} weaker attribution(s) dropped - a detection inside a "
+            "registered block is already placed more tightly than a district "
+            "can place it".format(dropped))
     return out
+
+
+def _geom_key(geom) -> str:
+    """Enough of a geometry to tell one detection from another."""
+    import json as _json
+    try:
+        return _json.dumps(geom, sort_keys=True)[:400]
+    except Exception:
+        return str(geom)[:400]
 
 
 def summary(report: dict) -> str:
